@@ -1,6 +1,6 @@
 # SiliconFlow Speech-to-Text
 
-一个简单而强大的语音转文字 Web 应用，支持多种语音识别 API 接入。
+一个简单而强大的语音转文字 Web 应用，支持多种语音识别 API 接入。现已经推出 Windows 打包版本，如您需要可前往 https://github.com/Qianxia666/siliconflow-speech-to-text-windows/blob/main/dist/SiliconflowSTT.exe 下载！
 
 ## 功能特点
 
