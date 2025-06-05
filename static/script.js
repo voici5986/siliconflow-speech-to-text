@@ -2,9 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const transcriptionForm = document.getElementById('transcriptionForm');
     const submitBtn = document.getElementById('submitBtn');
     const audioFileIn = document.getElementById('audioFile');
-    const apiEndpointIn = document.getElementById('apiEndpoint');
-    const apiKeyIn = document.getElementById('apiKey');
-    const modelNameIn = document.getElementById('modelName');
+    // 移除了对 apiEndpointIn, apiKeyIn, modelNameIn 的引用
     const transcriptionResultEl = document.getElementById('transcriptionResult');
     const statusMessageEl = document.getElementById('statusMessage');
     const copyBtn = document.getElementById('copyBtn');
@@ -32,77 +30,46 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Function to save form data to localStorage
-    const saveFormData = () => {
-        localStorage.setItem('apiEndpoint', apiEndpointIn.value);
-        localStorage.setItem('apiKey', apiKeyIn.value);
-        localStorage.setItem('modelName', modelNameIn.value);
-    };
-
-    // Function to load form data from localStorage
-    const loadFormData = () => {
-        apiEndpointIn.value = localStorage.getItem('apiEndpoint') || '';
-        apiKeyIn.value = localStorage.getItem('apiKey') || '';
-        modelNameIn.value = localStorage.getItem('modelName') || '';
-    };
-
-    // Load form data when the page loads
-    loadFormData();
-
-    // Save form data whenever an input changes
-    apiEndpointIn.addEventListener('input', saveFormData);
-    apiKeyIn.addEventListener('input', saveFormData);
-    modelNameIn.addEventListener('input', saveFormData);
+    // 移除了保存和加载表单数据的函数 (saveFormData, loadFormData)
+    // 移除了加载表单数据的调用 (loadFormData())
+    // 移除了保存表单数据的事件监听器 (apiEndpointIn, apiKeyIn, modelNameIn 的 input 事件)
 
     submitBtn.addEventListener('click', async (event) => {
         event.preventDefault();
 
         statusMessageEl.textContent = '';
-        statusMessageEl.className = 'status-message';
+        statusMessageEl.className = 'status-message'; // Reset classes
         transcriptionResultEl.textContent = '';
         copyBtn.classList.add('hidden'); // 隐藏复制按钮
 
         const audioFile = audioFileIn.files[0];
-        const apiEndpointUrl = apiEndpointIn.value.trim();
-        const apiKey = apiKeyIn.value.trim();
-        const modelName = modelNameIn.value.trim();
+        // 移除了获取 apiEndpointUrl, apiKey, modelName 的代码
 
         if (!audioFile) {
             statusMessageEl.textContent = '请选择一个音频文件。';
             statusMessageEl.classList.add('error');
             return;
         }
-        if (!apiEndpointUrl) {
-            statusMessageEl.textContent = '请输入 API 端点 URL。';
-            statusMessageEl.classList.add('error');
-            return;
-        }
-        if (!apiKey) {
-            statusMessageEl.textContent = '请输入 API 密钥。';
-            statusMessageEl.classList.add('error');
-            return;
-        }
-        if (!modelName) {
-            statusMessageEl.textContent = '请输入模型名称。';
-            statusMessageEl.classList.add('error');
-            return;
-        }
+        // 移除了对 apiEndpointUrl, apiKey, modelName 的空值验证
 
         const formData = new FormData();
         formData.append('audio_file', audioFile);
-        formData.append('api_endpoint_url', apiEndpointUrl);
-        formData.append('api_key', apiKey);
-        formData.append('model_name', modelName);
+        // 移除了将 apiEndpointUrl, apiKey, modelName 添加到 formData 的代码
 
         statusMessageEl.textContent = '正在处理中，请稍候...';
         statusMessageEl.classList.add('info');
         submitBtn.disabled = true;
         submitBtn.textContent = '处理中...';
+        // 添加一个类来改变按钮样式，例如 bg-gray-400
+        submitBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700'); // 移除原有颜色类
+        submitBtn.classList.add('bg-gray-400', 'cursor-not-allowed'); // 添加禁用样式类
+
 
         try {
+            // 发送请求到后端的 /transcribe 端点
             const response = await fetch('/transcribe', {
                 method: 'POST',
-                body: formData
+                body: formData // 只发送音频文件
             });
 
             const result = await response.json();
@@ -110,22 +77,26 @@ document.addEventListener('DOMContentLoaded', () => {
             if (response.ok && result.status === 'success') {
                 transcriptionResultEl.textContent = result.transcription;
                 statusMessageEl.textContent = '转录成功！';
-                statusMessageEl.className = 'status-message success';
+                statusMessageEl.className = 'status-message success'; // Update classes
                 copyBtn.classList.remove('hidden'); // 显示复制按钮
             } else {
                 transcriptionResultEl.textContent = '';
+                // 显示后端返回的错误信息
                 statusMessageEl.textContent = `错误: ${result.message || '未知错误'}`;
-                statusMessageEl.className = 'status-message error';
+                statusMessageEl.className = 'status-message error'; // Update classes
             }
 
         } catch (error) {
             console.error('Fetch error:', error);
             transcriptionResultEl.textContent = '';
             statusMessageEl.textContent = '请求失败，请检查网络连接或联系管理员。';
-            statusMessageEl.className = 'status-message error';
+            statusMessageEl.className = 'status-message error'; // Update classes
         } finally {
             submitBtn.disabled = false;
             submitBtn.textContent = '开始转录';
+            // 恢复按钮样式
+            submitBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
+
         }
     });
-}); 
+});
