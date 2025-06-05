@@ -42,9 +42,11 @@ h1::after {
     margin: 0 auto;
 }
 
+/* .space-y-2 类本身保留，因为它可能被用于其他地方，尽管在 index.html 中应用它的元素减少了 */
 .space-y-2 {
     margin-bottom: 1.5rem;
 }
+
 
 label {
     display: flex;
@@ -58,6 +60,7 @@ label span {
     font-weight: normal;
 }
 
+/* 保留 input[type="file"] 的样式，input[type="text"] 规则现在是多余的，但合并写不影响 */
 input[type="file"],
 input[type="text"] {
     background: white;
@@ -85,7 +88,8 @@ input[type="text"]:focus {
 
 /* 按钮样式 */
 #submitBtn {
-    background: linear-gradient(135deg, #2563eb, #4f46e5);
+    /* 背景色现在主要由 Tailwind 类 bg-indigo-600 控制 */
+    /* background: linear-gradient(135deg, #2563eb, #4f46e5); */
     border: none;
     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
     transition: all 0.2s ease;
@@ -98,7 +102,7 @@ input[type="text"]:focus {
 #submitBtn:hover {
     transform: translateY(-1px);
     box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);
-    filter: brightness(1.05);
+    /* filter: brightness(1.05); /* 这个也可以由 Tailwind hover:brightness-105 控制，但保留也无妨 */
 }
 
 #submitBtn:active {
@@ -106,12 +110,16 @@ input[type="text"]:focus {
     box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
 }
 
+/* 移除了 :disabled 伪类的样式，禁用状态现在由 JS 添加的类控制 */
+/*
 #submitBtn:disabled {
     background: linear-gradient(135deg, #94a3b8, #cbd5e1);
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
 }
+*/
+
 
 /* 结果区域样式 */
 #transcriptionResult {
@@ -194,16 +202,17 @@ input[type="text"]:focus {
         margin: 0.5rem;
         padding: 1rem;
     }
-    
+
     h1 {
         font-size: 1.8rem;
         margin-bottom: 1.5rem;
     }
-    
+
     #transcriptionForm {
         padding: 1.25rem;
     }
 
+    /* 保留 input[type="file"] 的响应式调整 */
     input[type="file"],
     input[type="text"] {
         font-size: 0.9rem;
@@ -251,12 +260,13 @@ input[type="file"] {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 200px;
+    max-width: 200px; /* 可以根据需要调整最大宽度 */
     line-height: 1;
 }
 
 /* 复制按钮样式 */
 #copyBtn {
+    /* 背景色现在主要由 Tailwind 类 bg-indigo-600 控制，这里是备用或叠加 */
     background: linear-gradient(135deg, #4f46e5, #3b82f6);
     transition: all 0.2s ease;
 }
@@ -266,6 +276,7 @@ input[type="file"] {
     box-shadow: 0 4px 12px rgba(79, 70, 229, 0.2);
 }
 
+/* JS 添加的类来改变复制按钮状态 */
 #copyBtn.bg-green-500 {
     background: linear-gradient(135deg, #10b981, #059669);
 }
@@ -273,3 +284,4 @@ input[type="file"] {
 #copyBtn.bg-red-500 {
     background: linear-gradient(135deg, #ef4444, #dc2626);
 }
+
