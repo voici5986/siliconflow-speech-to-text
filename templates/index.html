@@ -12,9 +12,9 @@
     <div class="container mx-auto bg-white shadow-xl rounded-2xl w-full max-w-6xl overflow-hidden">
         <div class="relative text-center">
             <h1 class="text-4xl font-bold py-8">语音转文本</h1>
-            <p class="text-gray-600 text-lg">使用硅基流动相关模型，将您的音频转换为文字</p>
+            <p class="text-gray-600 text-lg">将您的音频转换为文字并进行校准</p>
         </div>
-        
+
         <div class="md:flex md:space-x-8 p-6 md:p-10">
             <div class="md:w-2/5">
                 <form id="transcriptionForm" class="space-y-6 p-8 rounded-xl">
@@ -33,41 +33,12 @@
                                 </label>
                                 <span id="fileNameDisplay" class="ml-3 text-sm text-gray-500">未选择文件</span>
                             </div>
-                            <input type="file" id="audioFile" name="audio_file" accept="audio/*" required 
+                            <input type="file" id="audioFile" name="audio_file" accept="audio/*" required
                                    class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
                         </div>
                     </div>
 
-                    <div class="space-y-2">
-                        <label for="apiEndpoint" class="block text-sm font-medium text-gray-700">
-                            API 端点
-                            <span class="text-xs text-gray-500">服务器接口地址</span>
-                        </label>
-                        <input type="text" id="apiEndpoint" name="api_endpoint_url" 
-                               placeholder="https://api.siliconflow.cn/v1/audio/transcriptions" required 
-                               class="block w-full rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
-                    </div>
-
-                    <div class="space-y-2">
-                        <label for="apiKey" class="block text-sm font-medium text-gray-700">
-                            API 密钥
-                            <span class="text-xs text-gray-500">您的访问凭证</span>
-                        </label>
-                        <input type="text" id="apiKey" name="api_key" placeholder="请输入您的 API 密钥" required 
-                               class="block w-full rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
-                    </div>
-
-                    <div class="space-y-2">
-                        <label for="modelName" class="block text-sm font-medium text-gray-700">
-                            模型选择
-                            <span class="text-xs text-gray-500">选择转录模型</span>
-                        </label>
-                        <input type="text" id="modelName" name="model_name" 
-                               placeholder="FunAudioLLM/SenseVoiceSmall" required 
-                               class="block w-full rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
-                    </div>
-                    
-                    <button type="button" id="submitBtn" 
+                    <button type="button" id="submitBtn"
                             class="w-full rounded-lg text-base text-white">
                         <span>开始转录</span>
                     </button>
@@ -90,7 +61,7 @@
     </div>
 
     <footer class="text-center text-gray-600 mt-8 text-sm">
-        <p><a href="https://github.com/Qianxia666/siliconflow-speech-to-text" target="_blank" class="hover:text-indigo-600 transition-colors">©siliconflow-speech-to-text</a></p>
+        <p><a href="https://github.com/xy2yp/Speech-To-Text" target="_blank" class="hover:text-indigo-600 transition-colors">©Speech-To-Text By XY</a></p>
     </footer>
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
@@ -102,4 +73,4 @@
         });
     </script>
 </body>
-</html> 
+</html>
