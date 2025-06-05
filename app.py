@@ -47,7 +47,7 @@ Workflows:
 检查: 确认修正后的文字保持原文完整性和准确性。
 """
 
-# 在应用启动时进行一次基本的配置验证
+# 在应用启动时进行一次基本的配置验证 
 if not S2T_API_KEY:
     print("警告: 环境变量 S2T_API_KEY 未设置。音频转录功能将无法使用。")
 if not S2T_API_URL.startswith(('http://', 'https://')):
