@@ -214,5 +214,6 @@ def transcribe_and_optimize_audio():
     return jsonify({"status": "success", "transcription": optimized_transcription})
 
 if __name__ == '__main__':
-    # 在生产环境中，不要使用 debug=True
-    app.run(debug=True)
+    # 使用 Waitress 替代 Flask 自带的服务器
+    from waitress import serve
+    serve(app, host='0.0.0.0', port=5000)
