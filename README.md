@@ -35,7 +35,7 @@
     version: '3.8'
     services:
       speech-to-text:
-        image: speech-to-test:latest
+        image: speech-to-text:latest
         container_name: speech-to-text
         environment:
           - S2T_API_URL = your-speech-to-text-api-endpoint-url
