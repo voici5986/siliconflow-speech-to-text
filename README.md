@@ -1,4 +1,4 @@
-# Speech-to-Text 音频转录校准工具
+# Speech-To-Text 音频转录校准工具
 
 ## 项目简介
 
