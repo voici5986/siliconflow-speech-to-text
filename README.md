@@ -1,82 +1,73 @@
-# SiliconFlow Speech-to-Text
+# Speech-To-Text 音频转录校准工具
 
-一个简单而强大的语音转文字 Web 应用，支持多种语音识别 API 接入。现已经推出 Windows 打包版本，如您需要可前往 https://github.com/Qianxia666/siliconflow-speech-to-text-windows 进行下载！
+## 项目简介
+
+一个简单而强大的语音转文字应用，支持多种语音识别 API 接入进行音频转录，并可调用 OpenAI 格式 API 进行校准优化。
 
 ## 功能特点
 
 - 🎤 支持上传音频文件进行转写
-- 🔌 灵活的 API 接入，支持多种语音识别服务（如 siliconflow 等）
+- 🔌 支持多种语音识别服务
+- ✒️ 支持对转录结果进行校准优化
+- 📑 支持一键生成摘要
+- 🚀 支持docker部署
 - 🌐 简洁的 Web 界面
-- 🔒 安全的 API 密钥管理
+- 🔒 通过环境变量配置 API 信息
+
+## 重大更新
+### 20250607更新
+- 新增**量子速读**功能：一键生成摘要。支持切换显示 原文/摘要。
+---
+### 20250606更新
+- 引入**自动分块**机制: 自动检测长文本，当转录稿超过设定长度时，智能分割成多个语义完整的文本块。避免超出 API Token 限制。
+- 引入**上下文感知**机制 : 在处理每个文本块时，将前一文本块的结尾部分作为上下文提示，一并发送给 AI 模型。确保最终文本的连贯性和风格一致性。
+- 引入**并发校准**机制: 多线程并发处理，可同时向校准服务 API 发送多个文本块的请求（当前并发数为3）。缩短超长文本的总体处理时间。
+- 引入**自动重试**机制: 在单文本块未成功校准时，自动进行最多3次重试。
+
+## 前端预览
+![image](https://github.com/user-attachments/assets/c27411d8-2e71-4194-ba9c-217787fae8bb)
+
+## 快速开始
+
+### 自行构建 Docker
+
+1. **构建镜像**:
+
+    ```bash
+    docker build -t speech-to-text .
+    ```
+
+2. **部署容器**:
+
+    ```bash
+    version: '3.8'
+    services:
+      speech-to-text:
+        image: speech-to-text:latest
+        container_name: speech-to-text
+        environment:
+          - S2T_API_URL = your-speech-to-text-api-endpoint-url
+          # 语音转录 API 地址，可选配置，默认是硅基(https://api.siliconflow.cn/v1/audio/transcriptions)
+          - S2T_API_KEY = your-speech-to-text-api-key
+          # 语音转录 API Key，必须配置
+          - S2T_MODEL = your-speech-to-text-model
+          # 语音转录模型，可选配置，默认是 FunAudioLLM/SenseVoiceSmall
+          - OPT_API_URL = your-text-optimizing-api-endpoint-url
+          # 文本校准优化 API 地址，可选配置，不配置不启用优化，直接转出转录结果
+          - OPT_API_KEY = your-text-optimizing-api-key
+          # 文本校准优化 API Key
+          - OPT_MODE = your-text-optimizing-model
+          # 文本校准优化模型
+        ports:
+          - "your-port:5000"
+    ```
 
 ## 技术栈
 
 - 后端：Python Flask
 - 前端：HTML, CSS, JavaScript
-- API：支持任何符合接口规范的语音识别 API
-
-## 快速开始
-
-### 环境要求
-
-- Python 3.x
-- pip（Python 包管理器）
-
-### 安装步骤
-
-1. 克隆仓库
-```bash
-git clone https://github.com/Qianxia666/siliconflow-speech-to-text
-cd siliconflow-speech-to-text
-```
-
-2. 安装依赖
-```bash
-pip install -r requirements.txt
-```
-
-3. 运行应用
-```bash
-python app.py
-```
-
-4. 在浏览器中访问 `http://localhost:5000`
-
-## 使用说明
-
-1. 打开应用后，你会看到一个简洁的上传界面
-2. 准备以下信息：
-   - 音频文件（支持常见音频格式）
-   - API 端点 URL
-   - API 密钥
-   - 模型名称
-3. 上传音频文件并填写相关信息
-4. 点击转写按钮，等待结果
-5. 转写完成后，文字结果会显示在页面上
-
-## API 接入说明
-
-本应用支持接入任何符合以下接口规范的语音识别 API：
-
-- 请求方式：POST
-- 请求参数：
-  - `file`：音频文件
-  - `model`：模型名称
-- 认证方式：Bearer Token
-- 返回格式：JSON，包含 `text` 字段
-
-## 贡献指南
-
-欢迎提交 Issue 和 Pull Request！
 
 ## 许可证
 
 MIT License
 
-## 联系方式
-
-如有问题或建议，欢迎提交 Issue。
-
-## 致谢
-
-感谢所有为本项目做出贡献的开发者！ 

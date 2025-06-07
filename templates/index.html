@@ -3,103 +3,72 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>语音转文本</title>
+    <title>音频转录校准工具</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
 </head>
-<body class="bg-gray-100 min-h-screen py-8 px-4">
-    <div class="container mx-auto bg-white shadow-xl rounded-2xl w-full max-w-6xl overflow-hidden">
-        <div class="relative text-center">
-            <h1 class="text-4xl font-bold py-8">语音转文本</h1>
-            <p class="text-gray-600 text-lg">使用硅基流动相关模型，将您的音频转换为文字</p>
+<body class="bg-page-gradient min-h-screen py-6 px-4 sm:py-8 sm:px-6 flex flex-col antialiased">
+
+    <div class="main-container mx-auto bg-container-light shadow-custom-xl rounded-custom-2xl w-full max-w-4xl overflow-hidden flex-grow flex flex-col">
+
+        <div class="text-center pt-8 pb-6 md:pt-10 md:pb-8 px-6">
+            <h1 class="text-3xl sm:text-4xl font-bold text-title-gradient">音频转录校准工具</h1>
+            <p class="text-gray-600 text-base sm:text-lg mt-2">将音频转换为文字，并进行校准，支持生成摘要</p>
         </div>
-        
-        <div class="md:flex md:space-x-8 p-6 md:p-10">
-            <div class="md:w-2/5">
-                <form id="transcriptionForm" class="space-y-6 p-8 rounded-xl">
-                    <div class="space-y-2">
-                        <label for="audioFile" class="block text-sm font-medium text-gray-700">
-                            音频文件
-                            <span class="text-xs text-gray-500">支持多种音频格式</span>
-                        </label>
-                        <div class="relative">
-                            <div class="flex items-center">
-                                <label for="audioFile" class="cursor-pointer inline-flex items-center px-4 py-2 bg-white border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-indigo-500">
-                                    <svg class="w-5 h-5 mr-2 -ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-                                    </svg>
-                                    选择音频文件
-                                </label>
-                                <span id="fileNameDisplay" class="ml-3 text-sm text-gray-500">未选择文件</span>
-                            </div>
-                            <input type="file" id="audioFile" name="audio_file" accept="audio/*" required 
-                                   class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
-                        </div>
-                    </div>
 
-                    <div class="space-y-2">
-                        <label for="apiEndpoint" class="block text-sm font-medium text-gray-700">
-                            API 端点
-                            <span class="text-xs text-gray-500">服务器接口地址</span>
+        <form id="transcriptionForm" class="px-4 sm:px-6 md:px-10 pb-6 md:pb-8">
+            <div class="file-upload-section bg-gray-50/70 p-4 sm:p-5 rounded-xl shadow-custom-md flex flex-col sm:flex-row items-center sm:space-x-4 space-y-3 sm:space-y-0">
+                <div class="file-input-wrapper flex-shrink-0 w-full sm:w-auto">
+                    <div class="relative">
+                        <label for="audioFile" class="file-input-label">
+                            <svg class="w-5 h-5 mr-2 -ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                            选择音频
                         </label>
-                        <input type="text" id="apiEndpoint" name="api_endpoint_url" 
-                               placeholder="https://api.siliconflow.cn/v1/audio/transcriptions" required 
-                               class="block w-full rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                        <input type="file" id="audioFile" name="audio_file" accept="audio/*" required
+                               class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
                     </div>
+                </div>
 
-                    <div class="space-y-2">
-                        <label for="apiKey" class="block text-sm font-medium text-gray-700">
-                            API 密钥
-                            <span class="text-xs text-gray-500">您的访问凭证</span>
-                        </label>
-                        <input type="text" id="apiKey" name="api_key" placeholder="请输入您的 API 密钥" required 
-                               class="block w-full rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
-                    </div>
+                <span id="fileNameDisplay" class="file-name-display flex-grow text-sm text-gray-700 bg-white rounded-lg border border-gray-200 px-3 py-2.5 min-w-0 w-full text-center sm:text-left">未选择文件</span>
 
-                    <div class="space-y-2">
-                        <label for="modelName" class="block text-sm font-medium text-gray-700">
-                            模型选择
-                            <span class="text-xs text-gray-500">选择转录模型</span>
-                        </label>
-                        <input type="text" id="modelName" name="model_name" 
-                               placeholder="FunAudioLLM/SenseVoiceSmall" required 
-                               class="block w-full rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
-                    </div>
-                    
-                    <button type="button" id="submitBtn" 
-                            class="w-full rounded-lg text-base text-white">
-                        <span>开始转录</span>
-                    </button>
-                </form>
+                <button type="button" id="submitBtn"
+                        class="submit-button flex-shrink-0 w-full sm:w-auto">
+                    <span>开始转录</span>
+                </button>
             </div>
+        </form>
 
-            <div class="md:w-3/5 mt-8 md:mt-0">
-                <div class="bg-white p-8 rounded-xl shadow-sm h-full">
-                    <div class="flex justify-between items-center mb-4">
-                        <h2 class="text-xl font-semibold text-gray-800">转录结果</h2>
-                        <button id="copyBtn" class="hidden px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">
+        <div class="results-area flex flex-col flex-grow px-4 sm:px-6 md:px-10 pb-6 md:pb-8 overflow-hidden">
+            <div class="results-content-wrapper bg-white/90 p-5 sm:p-6 rounded-xl shadow-custom-sm h-full flex flex-col flex-grow">
+                <div class="flex justify-between items-center mb-4 flex-shrink-0">
+                    <h2 class="text-lg sm:text-xl font-semibold text-gray-800 flex-grow min-w-0 mr-4">转录结果</h2>
+                    <div class="buttons-group flex space-x-2 flex-shrink-0">
+                        <button id="recalibrateBtn" class="recalibrate-button">
+                            重新校准
+                        </button>
+                        <button id="summarizeBtn" class="recalibrate-button">
+                            量子速读
+                        </button>
+                        <button id="copyBtn" class="copy-button">
                             复制文本
                         </button>
                     </div>
-                    <div id="statusMessage" class="status-message hidden"></div>
-                    <pre id="transcriptionResult" class="rounded-lg text-gray-700 text-sm p-4 min-h-[300px] max-h-[500px] overflow-y-auto whitespace-pre-wrap break-words bg-gray-50"></pre>
                 </div>
+
+                <div id="statusMessage" class="status-message hidden mb-4 flex-shrink-0"></div>
+
+                <pre id="transcriptionResult" class="transcription-output flex-grow min-h-0"></pre>
             </div>
         </div>
+
     </div>
 
-    <footer class="text-center text-gray-600 mt-8 text-sm">
-        <p><a href="https://github.com/Qianxia666/siliconflow-speech-to-text" target="_blank" class="hover:text-indigo-600 transition-colors">©siliconflow-speech-to-text</a></p>
+    <footer class="app-footer flex-shrink-0">
+        <p><a href="https://github.com/xy2yp/Speech-To-Text" target="_blank">© Speech-To-Text By XY</a></p>
     </footer>
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
-    <script>
-        // 显示选择的文件名
-        document.getElementById('audioFile').addEventListener('change', function(e) {
-            const fileName = e.target.files[0] ? e.target.files[0].name : '未选择文件';
-            document.getElementById('fileNameDisplay').textContent = fileName;
-        });
-    </script>
 </body>
-</html> 
+</html>
