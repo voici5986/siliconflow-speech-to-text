@@ -1,32 +1,29 @@
-# app.py
-
 from flask import Flask, render_template, request, jsonify
 import requests
 import os
 import time
 import re
 from concurrent.futures import ThreadPoolExecutor
+from waitress import serve
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', static_url_path='')
 
 # --- 服务配置 ---
-# S2T (Speech-to-Text)
 S2T_API_URL = os.environ.get('S2T_API_URL', 'https://api.siliconflow.cn/v1/audio/transcriptions')
 S2T_API_KEY = os.environ.get('S2T_API_KEY')
 S2T_MODEL = os.environ.get('S2T_MODEL', 'FunAudioLLM/SenseVoiceSmall')
 
-# OPT (Optimize Text)
 OPT_API_URL = os.environ.get('OPT_API_URL', 'https://api.openai.com/v1/chat/completions')
 OPT_API_KEY = os.environ.get('OPT_API_KEY')
 OPT_MODEL = os.environ.get('OPT_MODEL')
 
 # --- 分块处理配置 ---
-CHUNK_TARGET_SIZE = 5000  # 每个文本块的目标字符数
-CHUNK_PROCESSING_THRESHOLD = 5500 # 超过此字符数则启用分块处理
-MAX_CONCURRENT_WORKERS = 3 # 并发处理的线程数
-RETRY_ATTEMPTS = 3 # 每个块的最大重试次数 (1次初试 + 2次重试)
+CHUNK_TARGET_SIZE = 5000
+CHUNK_PROCESSING_THRESHOLD = 5500
+MAX_CONCURRENT_WORKERS = 3
+RETRY_ATTEMPTS = 3
 
-# --- Prompt ---
+# --- Prompts ---
 HARDCODED_OPTIMIZATION_PROMPT = """
 Description:
 你是一位录音文字校准专家，能够消除口语表达中的停顿、重复和口语化语气词等常见问题，同时能解决录音软件在记录文字时会产生的错别字、多音字记录不准等技术问题，将口语化的录音文件转换为书面文字。
@@ -57,6 +54,61 @@ Workflows:
 检查: 确认修正后的文字保持原文完整性和准确性。
 """
 
+PROMPT_SUMMARY_MAP = """
+Description:
+你是一位信息分析专家，正在执行一个大型文档分析任务的第一步。你的当前任务是，从提供给你的【文档片段】中，高效、精准地提取出所有的核心信息和关键要点。你提取出的要点将作为后续最终摘要整合的【原材料】。
+Skills：
+1.提炼关键信息：快速识别并提取关键词、主题句或中心思想。
+2.逻辑梳理：理解文字的内在逻辑，确保提取的要点条理清晰。
+3.分类归类：能够将片段内的相关信息点进行有效归纳。
+4.概括提升：在归纳的基础上，提炼出更高层次的概念或结论。
+5.精简语言：使用最凝练的语言来表达要点，去除所有不必要的修饰和口语化内容。
+Rules：
+1.准确全面：提取的要点必须准确反映【文档片段】的核心内容，不能遗漏重要信息。
+2.客观中立：仅提取事实和观点，不掺杂个人情绪或进行二次解读。
+3.重点突出：把握住片段的重点和主旨，突出核心内容。
+Workflows：
+1. 仔细阅读用户给出的【文档片段】原文。
+2. 根据 <Rules> 对原文进行分析，提取出所有关键信息点。
+3. 将这些关键信息点整理成一个无序列表（bullet points）进行输出。
+Output Format:
+- [要点1]
+- [要点2]
+- [要点3]
+Constraints:
+1. 忠于原文，不得改变【文档片段】的原意。
+2. 只输出要点列表，不要输出任何额外的标题、开头、结尾、解释或说明。例如，不要写“以下是本文档片段的要点：”。
+3. 每个要点都应是独立的、有意义的信息单元。
+"""
+
+PROMPT_SUMMARY_REDUCE = """
+Description:
+你是一位资深的首席编辑，你的任务是将一份由多位助理从一篇长篇录音稿中分段提取的【核心要点清单】进行最终整合，撰写成一份完整、流畅、逻辑清晰的最终摘要，供高层决策者阅读。
+Background:
+你收到的【核心要点清单】是按原文顺序排列的，但因为是分段提取，所以可能存在轻微的重复、风格不一或上下文断裂的问题。你的专业价值在于消除这些问题，创造出一篇浑然一体的最终作品。
+Skills：
+1. 全局视野：能够从零散的要点中洞察整个文档的宏观结构和核心主旨。
+2. 叙事构建：擅长将独立的要点有机地串联起来，构建出有开头、有主体、有结尾的流畅叙事。
+3. 逻辑重构：识别并梳理要点之间的逻辑关系（因果、并列、递进等），形成严密的逻辑链条。
+4. 语言润色：使用专业、精炼、书面化的语言，统一全文风格，提升文本的专业性和可读性。
+5. 综合概括：在整合所有要点的基础上，进行更高层次的归纳与升华。
+Rules：
+1. 全面覆盖：最终摘要必须全面反映【核心要点清单】中提供的所有关键信息，不得遗漏。
+2. 连贯流畅：摘要的段落和句子之间必须过渡自然，逻辑通顺。
+3. 结构清晰：摘要应有引言部分概括主旨，主体部分分点或分段阐述，结论部分进行总结。
+4. 客观准确：忠实于要点清单的内容，不添加清单之外的信息或个人主观臆断。
+Workflows：
+1. 通读并理解整个【核心要点清单】。
+2. 在脑海中构思出最终摘要的宏观结构。
+3. 开始撰写，将独立的要点无缝地融入到流畅的段落中。
+4. 撰写完成后，进行通篇审阅，检查逻辑、流畅性和完整性。
+5. 输出最终的、可以直接发布的摘要成品，不要输出任何额外的解释或说明。
+Constraints:
+1. 绝对不要在摘要中提及“根据提供的要点”、“此清单显示”或“本文档的要点是”这类元语言。你必须让读者感觉，这份摘要是你直接阅读了全文后撰写的。
+2. 不要对要点进行简单的罗列或堆砌。你的核心任务是【整合】与【重构】。
+3. 输出格式应为一篇格式化良好、适合人类阅读的完整文章。
+"""
+
 # --- 配置检查 ---
 if not S2T_API_KEY:
     print("警告: 环境变量 S2T_API_KEY 未设置。音频转录功能将无法使用。")
@@ -83,21 +135,15 @@ def index():
     return render_template('index.html')
 
 def _extract_api_error_message(response):
-    """辅助函数，从API响应中提取错误信息"""
     try:
         error_detail = response.json()
-        api_err_msg = error_detail.get('error', {}).get('message') or \
-                      error_detail.get('message') or \
-                      error_detail.get('detail')
-        if api_err_msg:
-            return str(api_err_msg)
+        api_err_msg = error_detail.get('error', {}).get('message') or error_detail.get('message') or error_detail.get('detail')
+        if api_err_msg: return str(api_err_msg)
         return response.text[:200]
     except ValueError:
         return response.text[:200]
 
-# --- 智能文本分割与上下文处理辅助函数 ---
 def _split_text_intelligently(text, chunk_size=CHUNK_TARGET_SIZE):
-    """智能分割文本，确保在句子边界分割"""
     if not text or len(text) <= chunk_size:
         return [text] if text else []
     
@@ -127,64 +173,40 @@ def _split_text_intelligently(text, chunk_size=CHUNK_TARGET_SIZE):
     return [c for c in chunks if c.strip()]
 
 def _get_last_sentence(text):
-    """从文本中获取最后一句话作为上下文"""
-    if not text:
-        return ""
+    if not text: return ""
     sentences = re.split(r'(?<=[。？！\n])', text.strip())
     return sentences[-1].strip() if sentences else ""
 
 def _optimize_chunk_with_retry(chunk_data):
-    """处理单个文本块，包含重试和上下文逻辑"""
     text_chunk = chunk_data['text']
     context_sentence = chunk_data.get('context')
-    
     messages = [{"role": "system", "content": HARDCODED_OPTIMIZATION_PROMPT}]
     if context_sentence:
-        user_content = (
-            f"为了保持上下文连贯，这是紧接在当前文本之前的最后一句话：\n---CONTEXT---\n{context_sentence}\n---END CONTEXT---\n\n"
-            f"请仅校准并返回以下这段新的文本，不要在你的回答中重复上面的上下文内容：\n---TEXT TO CALIBRATE---\n{text_chunk}\n---END TEXT---"
-        )
+        user_content = (f"为了保持上下文连贯，这是紧接在当前文本之前的最后一句话：\n---CONTEXT---\n{context_sentence}\n---END CONTEXT---\n\n"
+                        f"请仅校准并返回以下这段新的文本，不要在你的回答中重复上面的上下文内容：\n---TEXT TO CALIBRATE---\n{text_chunk}\n---END TEXT---")
     else:
         user_content = text_chunk
     messages.append({"role": "user", "content": user_content})
-
     payload = {'model': OPT_MODEL, 'messages': messages, 'temperature': 0.1}
     headers = {'Authorization': f'Bearer {OPT_API_KEY}', 'Content-Type': 'application/json'}
-
     for attempt in range(RETRY_ATTEMPTS):
         try:
-            response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=300)
+            response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=200)
             if response.status_code == 200:
                 data = response.json()
                 content = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
-                if content:
-                    return {"status": "success", "content": content}
-                else:
-                    return {"status": "error", "message": "API返回空内容"}
-            
+                if content: return {"status": "success", "content": content}
+                else: return {"status": "error", "message": "API返回空内容"}
             error_msg = f"API错误 {response.status_code}: {_extract_api_error_message(response)}"
-            if response.status_code in [400, 401, 403, 429]: # 不可重试的客户端错误
-                return {"status": "error", "message": error_msg}
-            # 对于服务端错误 (e.g., 5xx) 或其他可恢复错误，将继续重试
-
-        except requests.exceptions.Timeout:
-            error_msg = "请求超时"
-        except requests.exceptions.RequestException as e:
-            error_msg = f"网络连接错误: {type(e).__name__}"
-        
-        if attempt == RETRY_ATTEMPTS - 1:
-            return {"status": "error", "message": error_msg}
-        
-        print(f"块处理失败 (尝试 {attempt + 1}/{RETRY_ATTEMPTS}): {error_msg}. 将在 {2 * (attempt + 1)} 秒后重试...")
+            if response.status_code in [400, 401, 403, 429]: return {"status": "error", "message": error_msg}
+        except requests.exceptions.Timeout: error_msg = "请求超时"
+        except requests.exceptions.RequestException as e: error_msg = f"网络连接错误: {type(e).__name__}"
+        if attempt == RETRY_ATTEMPTS - 1: return {"status": "error", "message": error_msg}
         time.sleep(2 * (attempt + 1))
-
     return {"status": "error", "message": "未知错误，已达最大重试次数"}
 
-
-# --- 重构核心校准函数 ---
 def _perform_text_optimization(raw_text_to_optimize):
     opt_configured_properly = OPT_API_KEY and OPT_API_URL and OPT_API_URL.startswith(('http://', 'https://')) and OPT_MODEL
-    
     if not opt_configured_properly:
         skip_reason_parts = []
         if not OPT_API_KEY: skip_reason_parts.append("缺少API Key")
@@ -209,9 +231,6 @@ def _perform_text_optimization(raw_text_to_optimize):
             
     print(f"文本过长({len(raw_text_to_optimize)}字)，启动分块并发校准...")
     chunks = _split_text_intelligently(raw_text_to_optimize)
-    if not chunks:
-        return raw_text_to_optimize, "校准失败 (文本分割后为空)", False
-        
     print(f"文本被分割为 {len(chunks)} 块，使用 {MAX_CONCURRENT_WORKERS} 个并发进行处理。")
     
     tasks = []
@@ -234,7 +253,59 @@ def _perform_text_optimization(raw_text_to_optimize):
         print("所有块均已成功校准并合并。")
         return full_optimized_text, "校准成功！", True
 
-# --- 路由部分 (调用已封装的逻辑) ---
+def _summarize_chunk_with_retry(text_chunk):
+    messages = [{"role": "system", "content": PROMPT_SUMMARY_MAP}, {"role": "user", "content": text_chunk}]
+    payload = {'model': OPT_MODEL, 'messages': messages, 'temperature': 0.1}
+    headers = {'Authorization': f'Bearer {OPT_API_KEY}', 'Content-Type': 'application/json'}
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=200)
+            if response.status_code == 200:
+                data = response.json()
+                content = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+                if content: return {"status": "success", "content": content}
+                else: return {"status": "error", "message": "API为Map阶段返回空内容"}
+            error_msg = f"API错误 {response.status_code}: {_extract_api_error_message(response)}"
+            if response.status_code in [400, 401, 403, 429]: return {"status": "error", "message": error_msg}
+        except requests.exceptions.Timeout: error_msg = "请求超时"
+        except requests.exceptions.RequestException as e: error_msg = f"网络连接错误: {type(e).__name__}"
+        if attempt == RETRY_ATTEMPTS - 1: return {"status": "error", "message": error_msg}
+        print(f"总结块处理失败 (尝试 {attempt + 1}/{RETRY_ATTEMPTS}): {error_msg}. 将在 {2 * (attempt + 1)} 秒后重试...")
+        time.sleep(2 * (attempt + 1))
+    return {"status": "error", "message": "未知错误，已达最大重试次数"}
+
+def _perform_summarization(text_to_summarize):
+    print("开始总结任务: Map 阶段 - 并发提取要点...")
+    chunks = _split_text_intelligently(text_to_summarize)
+    if not chunks: return {"status": "error", "message": "待总结文本为空或分割失败"}
+    print(f"文本被分割为 {len(chunks)} 块，进行并发处理...")
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_WORKERS) as executor:
+        map_results = list(executor.map(_summarize_chunk_with_retry, chunks))
+    failed_chunks = [res for res in map_results if res['status'] == 'error']
+    if failed_chunks:
+        first_error = failed_chunks[0]['message']
+        print(f"Map 阶段失败: {first_error}")
+        return {"status": "error", "message": f"提取要点失败 ({first_error})"}
+    print("Map 阶段成功。开始 Reduce 阶段 - 整合生成最终摘要...")
+    combined_points = "\n\n".join([res['content'] for res in map_results])
+    messages = [{"role": "system", "content": PROMPT_SUMMARY_REDUCE}, {"role": "user", "content": combined_points}]
+    payload = {'model': OPT_MODEL, 'messages': messages, 'temperature': 0.2}
+    headers = {'Authorization': f'Bearer {OPT_API_KEY}', 'Content-Type': 'application/json'}
+    try:
+        response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=200)
+        if response.status_code == 200:
+            data = response.json()
+            final_summary = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+            if final_summary:
+                print("Reduce 阶段成功，已生成最终摘要。")
+                return {"status": "success", "summary": final_summary}
+            else: return {"status": "error", "message": "API为Reduce阶段返回空内容"}
+        else:
+            error_msg = f"API错误 {response.status_code}: {_extract_api_error_message(response)}"
+            return {"status": "error", "message": f"整合摘要失败 ({error_msg})"}
+    except Exception as e: return {"status": "error", "message": f"处理Reduce阶段时发生未知错误: {str(e)}"}
+
+# --- 路由 ---
 @app.route('/transcribe', methods=['POST'])
 def transcribe_and_optimize_audio():
     audio_file = request.files.get('audio_file')
@@ -268,7 +339,7 @@ def transcribe_and_optimize_audio():
             error_details = _extract_api_error_message(s2t_response)
             s2t_error_message = f"S2T API 返回错误: {s2t_response.status_code} - {error_details}"
             print(s2t_error_message)
-            return jsonify({"error": s2t_error_message}), 500
+            return jsonify({"error": s2t_error_message}), s2t_response.status_code
             
     except requests.exceptions.Timeout:
         return jsonify({"error": "调用 S2T API 超时，请稍后再试或检查文件大小。"}), 500
@@ -316,8 +387,23 @@ def recalibrate_text():
         "is_calibrated": calibration_success
     })
 
+@app.route('/summarize', methods=['POST'])
+def summarize_text():
+    data = request.get_json()
+    if not data or 'text_to_summarize' not in data:
+        return jsonify({"error": "请求体无效或缺少 'text_to_summarize' 字段"}), 400
+    
+    text = data.get('text_to_summarize')
+    if not text or not text.strip():
+        return jsonify({"error": "待总结的文本不能为空"}), 400
+        
+    result = _perform_summarization(text)
+    
+    if result['status'] == 'success':
+        return jsonify({"summary": result['summary']})
+    else:
+        return jsonify({"error": result['message']}), 500
 
 if __name__ == '__main__':
-    from waitress import serve
     print("服务器正在启动，监听 http://0.0.0.0:5000")
     serve(app, host='0.0.0.0', port=5000)
