@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', function() {
+    // --- 元素获取 ---
     const audioFileInput = document.getElementById('audioFile');
     const fileNameDisplay = document.getElementById('fileNameDisplay');
     const submitBtn = document.getElementById('submitBtn');
@@ -6,9 +7,15 @@ document.addEventListener('DOMContentLoaded', function() {
     const transcriptionResult = document.getElementById('transcriptionResult');
     const copyBtn = document.getElementById('copyBtn');
     const recalibrateBtn = document.getElementById('recalibrateBtn');
+    const summarizeBtn = document.getElementById('summarizeBtn'); // 新增
 
+    // --- 状态变量 ---
     let currentRawTranscription = null;
+    let currentCalibratedText = null; // 新增：存储校准后的全文
+    let summaryText = null;           // 新增：存储摘要
+    let isShowingSummary = false;     // 新增：标记当前是否显示摘要
 
+    // --- UI 更新函数 ---
     function updateStatus(message, type) {
         statusMessage.textContent = message || '';
         statusMessage.classList.remove('error', 'success', 'info', 'hidden');
@@ -23,54 +30,78 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     function setActionButtonsDisabledState(disabled) {
+        // 主提交按钮是独立的
         submitBtn.disabled = disabled;
-        recalibrateBtn.disabled = disabled;
         
-        // 复制按钮的禁用状态：如果文本框为空，则始终禁用；否则根据操作状态(disabled参数)决定
-        if (transcriptionResult.textContent.trim() === '') {
-            copyBtn.disabled = true;
-        } else {
-            copyBtn.disabled = disabled;
+        // 结果区域的操作按钮
+        const hasContent = transcriptionResult.textContent.trim() !== '';
+        recalibrateBtn.disabled = disabled || !hasContent;
+        copyBtn.disabled = disabled || !hasContent;
+        summarizeBtn.disabled = disabled || !hasContent;
+    }
+
+    // --- 状态重置函数 ---
+    function resetSummaryState() {
+        summaryText = null;
+        isShowingSummary = false;
+        summarizeBtn.textContent = '量子速读';
+        if (currentCalibratedText) {
+            transcriptionResult.textContent = currentCalibratedText;
         }
     }
 
     function resetUIForNewFile() {
         updateStatus(null, null);
         transcriptionResult.textContent = '';
-        // copyBtn 不再需要 classList.add('hidden');
         copyBtn.classList.remove('copied-success', 'copied-error');
         copyBtn.textContent = '复制文本';
+        
+        // 重置所有状态变量
         currentRawTranscription = null;
-        setActionButtonsDisabledState(false); // 重置时会根据文本框内容更新复制按钮禁用状态
+        currentCalibratedText = null;
+        summaryText = null;
+        isShowingSummary = false;
 
-        const submitBtnSpan = submitBtn.querySelector('span');
-        if (submitBtnSpan) {
-            submitBtnSpan.textContent = '开始转录';
-        } else {
-            submitBtn.textContent = '开始转录';
-        }
-        const recalibrateBtnSpan = recalibrateBtn.querySelector('span'); // Assuming recalibrate button might also have a span
-        if (recalibrateBtnSpan) {
-             recalibrateBtnSpan.textContent = '重新校准';
-        } else {
-             recalibrateBtn.textContent = '重新校准';
-        }
+        // 重置按钮状态和文本
+        recalibrateBtn.disabled = true;
+        copyBtn.disabled = true;
+        summarizeBtn.disabled = true;
+        summarizeBtn.textContent = '量子速读';
+        
+        const submitBtnSpan = submitBtn.querySelector('span') || submitBtn;
+        submitBtnSpan.textContent = '开始转录';
     }
 
+    // --- 事件监听器 ---
     audioFileInput.addEventListener('change', function(e) {
         const file = e.target.files[0];
         if (file) {
             fileNameDisplay.textContent = file.name;
+            submitBtn.disabled = false;
+            resetUIForNewFile();
         } else {
             fileNameDisplay.textContent = '未选择文件';
+            submitBtn.disabled = true;
         }
-        resetUIForNewFile();
     });
+    
+    function handleSuccess(data, operationType) {
+        // 只有当提供了原始转录稿时才更新
+        if (data.raw_transcription) {
+            currentRawTranscription = data.raw_transcription;
+        }
+        currentCalibratedText = data.transcription;
+        
+        const messageType = data.is_calibrated ? 'success' : 'info';
+        updateStatus(data.calibration_message || `${operationType}完成。`, messageType);
+        transcriptionResult.textContent = data.transcription;
+        
+        resetSummaryState(); // 每次获得新文本，都重置摘要状态
+    }
 
     submitBtn.addEventListener('click', async function(event) {
         event.preventDefault();
         const file = audioFileInput.files[0];
-
         if (!file) {
             updateStatus('请先选择一个音频文件。', 'error');
             return;
@@ -78,123 +109,122 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const formData = new FormData();
         formData.append('audio_file', file);
-
+        
         updateStatus('正在上传和转录音频...', 'info');
-        transcriptionResult.textContent = ''; // 清空是为了在 finally 中 setActionButtonsDisabledState 能正确判断 copyBtn 状态
-        currentRawTranscription = null;
-        // copyBtn 不再需要 classList.add('hidden');
-
+        transcriptionResult.textContent = '';
         setActionButtonsDisabledState(true);
-        const submitBtnSpan = submitBtn.querySelector('span');
-        const originalSubmitBtnText = submitBtnSpan ? submitBtnSpan.textContent : submitBtn.textContent;
-        if(submitBtnSpan) submitBtnSpan.textContent = '处理中...'; else submitBtn.textContent = '处理中...';
+        const submitBtnSpan = submitBtn.querySelector('span') || submitBtn;
+        const originalText = submitBtnSpan.textContent;
+        submitBtnSpan.textContent = '处理中...';
 
         try {
-            const response = await fetch('/transcribe', {
-                method: 'POST',
-                body: formData
-            });
-
+            const response = await fetch('/transcribe', { method: 'POST', body: formData });
             if (!response.ok) {
-                let errorMsg = `请求失败 (状态 ${response.status})`;
-                try { 
-                    const errorData = await response.json(); 
-                    errorMsg = errorData.error || errorMsg; 
-                } catch (e) { 
-                    const textError = await response.text(); 
-                    errorMsg = textError || errorMsg; 
-                    if (response.status === 0 && !textError && errorMsg === `请求失败 (状态 ${response.status})`) {
-                        errorMsg = "无法连接到服务器，请检查网络或服务是否在线。";
-                    }
-                }
-                throw new Error(errorMsg);
+                const errorData = await response.json().catch(() => ({ error: `请求失败 (状态 ${response.status})` }));
+                throw new Error(errorData.error);
             }
-
             const data = await response.json();
-
-            if (data.status === "success" && data.transcription !== undefined) {
-                currentRawTranscription = data.raw_transcription;
-                const messageType = data.is_calibrated ? 'success' : 'info';
-                updateStatus(data.calibration_message || '处理完成。', messageType);
-                transcriptionResult.textContent = data.transcription;
-                // copyBtn 不再需要 classList.remove('hidden');
-                // setActionButtonsDisabledState(false) 在 finally 中会处理 copyBtn 的启用/禁用
-            } else if (data.error) {
-                 updateStatus(`处理失败: ${data.error}`, 'error');
+            if (data.status === "success") {
+                handleSuccess(data, "转录");
             } else {
-                updateStatus('转录失败或返回结果格式不正确。', 'error');
+                throw new Error(data.error || '转录失败或返回结果格式不正确。');
             }
         } catch (error) {
             console.error('转录错误:', error);
             updateStatus(`发生错误: ${error.message}`, 'error');
         } finally {
-            setActionButtonsDisabledState(false); // 根据最终文本框内容决定 copyBtn 状态
-            if(submitBtnSpan) submitBtnSpan.textContent = originalSubmitBtnText; else submitBtn.textContent = originalSubmitBtnText;
+            setActionButtonsDisabledState(false);
+            submitBtnSpan.textContent = originalText;
         }
     });
 
     recalibrateBtn.addEventListener('click', async function() {
         if (!currentRawTranscription) {
-            updateStatus('没有可供重新校准的原始转录文本。请先进行一次完整转录。', 'info');
+            updateStatus('没有可供重新校准的原始转录文本。', 'info');
             return;
         }
-        if (currentRawTranscription.trim() === '') {
-            updateStatus('原始转录文本为空，无法重新校准。', 'info');
-            return;
-        }
-
+        
         updateStatus('正在重新校准...', 'info');
-        // copyBtn 不再需要 classList.add('hidden');
-        // transcriptionResult.textContent = ''; // 清空放后面，如果失败则不应清空旧的成功结果
-
         setActionButtonsDisabledState(true);
-        const recalibrateBtnSpan = recalibrateBtn.querySelector('span');
-        const originalRecalibrateBtnText = recalibrateBtnSpan ? recalibrateBtnSpan.textContent : recalibrateBtn.textContent;
-        if(recalibrateBtnSpan) recalibrateBtnSpan.textContent = '校准中...'; else recalibrateBtn.textContent = '校准中...';
+        const originalText = recalibrateBtn.textContent;
+        recalibrateBtn.textContent = '校准中...';
 
         try {
             const response = await fetch('/recalibrate', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ raw_transcription: currentRawTranscription })
             });
-
             if (!response.ok) {
-                let errorMsg = `请求失败 (状态 ${response.status})`;
-                try { 
-                    const errorData = await response.json(); 
-                    errorMsg = errorData.error || errorData.message || errorMsg; 
-                } catch (e) { 
-                    const textError = await response.text(); 
-                    errorMsg = textError || errorMsg; 
-                    if (response.status === 0 && !textError && errorMsg === `请求失败 (状态 ${response.status})`) {
-                        errorMsg = "无法连接到服务器，请检查网络或服务是否在线。";
-                    }
-                }
-                throw new Error(errorMsg);
+                const errorData = await response.json().catch(() => ({ error: `请求失败 (状态 ${response.status})` }));
+                throw new Error(errorData.error);
             }
-
             const data = await response.json();
-
-            if (data.status === "success" && data.transcription !== undefined && data.calibration_message) {
-                const messageType = data.is_calibrated ? 'success' : 'error'; // 如果重新校准失败，用 error 提示
-                updateStatus(data.calibration_message, messageType);
-                transcriptionResult.textContent = data.transcription; // 更新文本
-                // copyBtn 不再需要 classList.remove('hidden');
-            } else if (data.error) {
-                 updateStatus(`重新校准失败: ${data.error}`, 'error');
+            if (data.status === "success") {
+                handleSuccess(data, "重新校准");
             } else {
-                updateStatus('重新校准失败或返回结果格式不正确。', 'error');
+                throw new Error(data.error || '重新校准失败或返回结果格式不正确。');
             }
-
         } catch (error) {
             console.error('重新校准错误:', error);
             updateStatus(`重新校准时发生错误: ${error.message}`, 'error');
         } finally {
-            setActionButtonsDisabledState(false); // 根据最终文本框内容决定 copyBtn 状态
-            if(recalibrateBtnSpan) recalibrateBtnSpan.textContent = originalRecalibrateBtnText; else recalibrateBtn.textContent = originalRecalibrateBtnText;
+            setActionButtonsDisabledState(false);
+            recalibrateBtn.textContent = originalText;
+        }
+    });
+    
+    summarizeBtn.addEventListener('click', async function() {
+        // 情况1：切换视图
+        if (summaryText) {
+            isShowingSummary = !isShowingSummary;
+            if (isShowingSummary) {
+                transcriptionResult.textContent = summaryText;
+                summarizeBtn.textContent = '显示原文';
+            } else {
+                transcriptionResult.textContent = currentCalibratedText;
+                summarizeBtn.textContent = '显示摘要';
+            }
+            return;
+        }
+
+        // 情况2：首次生成摘要
+        if (!currentCalibratedText || currentCalibratedText.trim() === '') {
+            updateStatus('没有可供总结的文本。', 'info');
+            return;
+        }
+
+        updateStatus('正在生成摘要...', 'info');
+        setActionButtonsDisabledState(true);
+        const originalText = summarizeBtn.textContent;
+        summarizeBtn.textContent = '生成中...';
+
+        try {
+            const response = await fetch('/summarize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text_to_summarize: currentCalibratedText })
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: `请求失败 (状态 ${response.status})` }));
+                throw new Error(errorData.error);
+            }
+
+            const data = await response.json();
+            summaryText = data.summary;
+            isShowingSummary = true;
+            
+            transcriptionResult.textContent = summaryText;
+            updateStatus('摘要生成成功！', 'success');
+            summarizeBtn.textContent = '显示原文';
+
+        } catch (error) {
+            console.error('生成摘要错误:', error);
+            updateStatus(`生成摘要失败 (${error.message})，请重试...`, 'error');
+            summarizeBtn.textContent = originalText;
+        } finally {
+            setActionButtonsDisabledState(false);
         }
     });
 
@@ -202,11 +232,11 @@ document.addEventListener('DOMContentLoaded', function() {
         if (copyBtn.disabled) return;
 
         const textToCopy = transcriptionResult.textContent;
-        const originalBtnText = copyBtn.textContent; // 固定的 "复制文本"
+        const originalBtnText = "复制文本";
         copyBtn.classList.remove('copied-success', 'copied-error');
 
         if (!textToCopy || textToCopy.trim() === '') {
-            updateStatus('没有可复制的文本。', 'info'); // 此时按钮应已禁用
+            updateStatus('没有可复制的文本。', 'info');
             return;
         }
 
@@ -214,7 +244,7 @@ document.addEventListener('DOMContentLoaded', function() {
             copyBtn.textContent = '已复制!';
             copyBtn.classList.add('copied-success');
             setTimeout(function() {
-                copyBtn.textContent = '复制文本'; // 恢复固定文本
+                copyBtn.textContent = originalBtnText;
                 copyBtn.classList.remove('copied-success');
             }, 2000);
         }).catch(function(err) {
@@ -222,7 +252,7 @@ document.addEventListener('DOMContentLoaded', function() {
             copyBtn.textContent = '复制失败';
             copyBtn.classList.add('copied-error');
             setTimeout(function() {
-                copyBtn.textContent = '复制文本'; // 恢复固定文本
+                copyBtn.textContent = originalBtnText;
                 copyBtn.classList.remove('copied-error');
             }, 3000);
         });
