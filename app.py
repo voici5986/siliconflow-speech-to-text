@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from waitress import serve
 
 app = Flask(__name__, static_folder='static', static_url_path='')
-
+ 
 # --- 服务配置 ---
 S2T_API_URL = os.environ.get('S2T_API_URL', 'https://api.siliconflow.cn/v1/audio/transcriptions')
 S2T_API_KEY = os.environ.get('S2T_API_KEY')
