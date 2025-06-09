@@ -7,13 +7,13 @@ document.addEventListener('DOMContentLoaded', function() {
     const transcriptionResult = document.getElementById('transcriptionResult');
     const copyBtn = document.getElementById('copyBtn');
     const recalibrateBtn = document.getElementById('recalibrateBtn');
-    const summarizeBtn = document.getElementById('summarizeBtn'); // 新增
+    const summarizeBtn = document.getElementById('summarizeBtn');
 
     // --- 状态变量 ---
     let currentRawTranscription = null;
-    let currentCalibratedText = null; // 新增：存储校准后的全文
-    let summaryText = null;           // 新增：存储摘要
-    let isShowingSummary = false;     // 新增：标记当前是否显示摘要
+    let currentCalibratedText = null;
+    let summaryText = null;
+    let isShowingSummary = false;
 
     // --- UI 更新函数 ---
     function updateStatus(message, type) {
@@ -30,13 +30,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     function setActionButtonsDisabledState(disabled) {
-        // 主提交按钮是独立的
         submitBtn.disabled = disabled;
         
-        // 结果区域的操作按钮
-        const hasContent = transcriptionResult.textContent.trim() !== '';
+        const hasContent = currentCalibratedText && currentCalibratedText.trim() !== '';
         recalibrateBtn.disabled = disabled || !hasContent;
-        copyBtn.disabled = disabled || !hasContent;
+        copyBtn.disabled = disabled || transcriptionResult.textContent.trim() === '';
         summarizeBtn.disabled = disabled || !hasContent;
     }
 
@@ -56,13 +54,11 @@ document.addEventListener('DOMContentLoaded', function() {
         copyBtn.classList.remove('copied-success', 'copied-error');
         copyBtn.textContent = '复制文本';
         
-        // 重置所有状态变量
         currentRawTranscription = null;
         currentCalibratedText = null;
         summaryText = null;
         isShowingSummary = false;
 
-        // 重置按钮状态和文本
         recalibrateBtn.disabled = true;
         copyBtn.disabled = true;
         summarizeBtn.disabled = true;
@@ -74,11 +70,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // --- 事件监听器 ---
     audioFileInput.addEventListener('change', function(e) {
-        const file = e.target.files[0];
+        const file = e.targec.files[0];
         if (file) {
             fileNameDisplay.textContent = file.name;
-            submitBtn.disabled = false;
             resetUIForNewFile();
+            submitBtn.disabled = false;
         } else {
             fileNameDisplay.textContent = '未选择文件';
             submitBtn.disabled = true;
@@ -86,7 +82,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     function handleSuccess(data, operationType) {
-        // 只有当提供了原始转录稿时才更新
         if (data.raw_transcription) {
             currentRawTranscription = data.raw_transcription;
         }
@@ -96,7 +91,7 @@ document.addEventListener('DOMContentLoaded', function() {
         updateStatus(data.calibration_message || `${operationType}完成。`, messageType);
         transcriptionResult.textContent = data.transcription;
         
-        resetSummaryState(); // 每次获得新文本，都重置摘要状态
+        resetSummaryState();
     }
 
     submitBtn.addEventListener('click', async function(event) {
@@ -118,7 +113,7 @@ document.addEventListener('DOMContentLoaded', function() {
         submitBtnSpan.textContent = '处理中...';
 
         try {
-            const response = await fetch('/transcribe', { method: 'POST', body: formData });
+            const response = await fetch('/api/transcribe', { method: 'POST', body: formData });
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({ error: `请求失败 (状态 ${response.status})` }));
                 throw new Error(errorData.error);
@@ -132,6 +127,7 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (error) {
             console.error('转录错误:', error);
             updateStatus(`发生错误: ${error.message}`, 'error');
+            currentCalibratedText = null;
         } finally {
             setActionButtonsDisabledState(false);
             submitBtnSpan.textContent = originalText;
@@ -150,7 +146,7 @@ document.addEventListener('DOMContentLoaded', function() {
         recalibrateBtn.textContent = '校准中...';
 
         try {
-            const response = await fetch('/recalibrate', {
+            const response = await fetch('/api/recalibrate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ raw_transcription: currentRawTranscription })
@@ -175,7 +171,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     summarizeBtn.addEventListener('click', async function() {
-        // 情况1：切换视图
         if (summaryText) {
             isShowingSummary = !isShowingSummary;
             if (isShowingSummary) {
@@ -188,7 +183,6 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // 情况2：首次生成摘要
         if (!currentCalibratedText || currentCalibratedText.trim() === '') {
             updateStatus('没有可供总结的文本。', 'info');
             return;
@@ -200,7 +194,7 @@ document.addEventListener('DOMContentLoaded', function() {
         summarizeBtn.textContent = '生成中...';
 
         try {
-            const response = await fetch('/summarize', {
+            const response = await fetch('/api/summarize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text_to_summarize: currentCalibratedText })
