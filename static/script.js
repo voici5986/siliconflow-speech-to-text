@@ -30,8 +30,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     function setActionButtonsDisabledState(disabled) {
+        // 主提交按钮是独立的
         submitBtn.disabled = disabled;
         
+        // 结果区域的操作按钮
         const hasContent = currentCalibratedText && currentCalibratedText.trim() !== '';
         recalibrateBtn.disabled = disabled || !hasContent;
         copyBtn.disabled = disabled || transcriptionResult.textContent.trim() === '';
@@ -45,37 +47,34 @@ document.addEventListener('DOMContentLoaded', function() {
         summarizeBtn.textContent = '量子速读';
         if (currentCalibratedText) {
             transcriptionResult.textContent = currentCalibratedText;
+        } else {
+            transcriptionResult.textContent = '';
         }
-    }
-
-    function resetUIForNewFile() {
-        updateStatus(null, null);
-        transcriptionResult.textContent = '';
-        copyBtn.classList.remove('copied-success', 'copied-error');
-        copyBtn.textContent = '复制文本';
-        
-        currentRawTranscription = null;
-        currentCalibratedText = null;
-        summaryText = null;
-        isShowingSummary = false;
-
-        recalibrateBtn.disabled = true;
-        copyBtn.disabled = true;
-        summarizeBtn.disabled = true;
-        summarizeBtn.textContent = '量子速读';
-        
-        const submitBtnSpan = submitBtn.querySelector('span') || submitBtn;
-        submitBtnSpan.textContent = '开始转录';
     }
 
     // --- 事件监听器 ---
     audioFileInput.addEventListener('change', function(e) {
-        const file = e.targec.files[0];
+        const file = e.target.files[0];
         if (file) {
+            // 1. 更新文件名 (保留)
             fileNameDisplay.textContent = file.name;
-            resetUIForNewFile();
+            
+            // 2. 清理上一次的转录结果和状态，为新任务做准备
+            updateStatus(null, null);
+            currentRawTranscription = null;
+            currentCalibratedText = null;
+            resetSummaryState(); // 重置摘要状态，这也会清空文本框
+    
+            // 3. 启用提交按钮，禁用其他操作按钮
             submitBtn.disabled = false;
+            recalibrateBtn.disabled = true;
+            copyBtn.disabled = true;
+            summarizeBtn.disabled = true;
+            copyBtn.textContent = '复制文本'; // 确保复制按钮文本也被重置
+            copyBtn.classList.remove('copied-success', 'copied-error');
+
         } else {
+            // 如果用户取消了文件选择
             fileNameDisplay.textContent = '未选择文件';
             submitBtn.disabled = true;
         }
@@ -106,8 +105,8 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('audio_file', file);
         
         updateStatus('正在上传和转录音频...', 'info');
-        transcriptionResult.textContent = '';
         setActionButtonsDisabledState(true);
+        
         const submitBtnSpan = submitBtn.querySelector('span') || submitBtn;
         const originalText = submitBtnSpan.textContent;
         submitBtnSpan.textContent = '处理中...';
@@ -171,6 +170,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     summarizeBtn.addEventListener('click', async function() {
+        // 情况1：切换视图
         if (summaryText) {
             isShowingSummary = !isShowingSummary;
             if (isShowingSummary) {
@@ -180,9 +180,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 transcriptionResult.textContent = currentCalibratedText;
                 summarizeBtn.textContent = '显示摘要';
             }
+            // 切换视图后，需要重新评估复制按钮的状态
+            copyBtn.disabled = transcriptionResult.textContent.trim() === '';
             return;
         }
 
+        // 情况2：首次生成摘要
         if (!currentCalibratedText || currentCalibratedText.trim() === '') {
             updateStatus('没有可供总结的文本。', 'info');
             return;
@@ -206,12 +209,16 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             const data = await response.json();
-            summaryText = data.summary;
-            isShowingSummary = true;
-            
-            transcriptionResult.textContent = summaryText;
-            updateStatus('摘要生成成功！', 'success');
-            summarizeBtn.textContent = '显示原文';
+            if (data.summary) {
+                summaryText = data.summary;
+                isShowingSummary = true;
+                
+                transcriptionResult.textContent = summaryText;
+                updateStatus('摘要生成成功！', 'success');
+                summarizeBtn.textContent = '显示原文';
+            } else {
+                throw new Error('API未能返回有效的摘要内容。');
+            }
 
         } catch (error) {
             console.error('生成摘要错误:', error);
