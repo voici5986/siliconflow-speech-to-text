@@ -1,13 +1,14 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 import requests
 import os
 import time
 import re
+import json
 from concurrent.futures import ThreadPoolExecutor
 from waitress import serve
 
 app = Flask(__name__, static_folder='static', static_url_path='')
-
+ 
 # --- 服务配置 ---
 S2T_API_URL = os.environ.get('S2T_API_URL', 'https://api.siliconflow.cn/v1/audio/transcriptions')
 S2T_API_KEY = os.environ.get('S2T_API_KEY')
@@ -22,6 +23,11 @@ CHUNK_TARGET_SIZE = 5000
 CHUNK_PROCESSING_THRESHOLD = 5500
 MAX_CONCURRENT_WORKERS = 3
 RETRY_ATTEMPTS = 3
+
+# --- OpenAI 兼容 API 配置 ---
+API_ACCESS_TOKEN = os.environ.get('API_ACCESS_TOKEN')
+MODEL_CALIBRATE = "s2t-calibrated"
+MODEL_SUMMARIZE = "s2t-summarized"
 
 # --- Prompts ---
 HARDCODED_OPTIMIZATION_PROMPT = """
@@ -50,7 +56,7 @@ Skills:
 Workflows:
 输入: 根据用户提交的录音转化为文字稿。
 校准: 消除停顿、重复和口语化语气词，修正错别字和多音字。
-输出: 提供校准后的高质量书面文字版本。不要输出任何额外的解释或说明。
+输出: 提供校准后的高质量书面文字版本。
 检查: 确认修正后的文字保持原文完整性和准确性。
 """
 
@@ -109,31 +115,7 @@ Constraints:
 3. 输出格式应为一篇格式化良好、适合人类阅读的完整文章。
 """
 
-# --- 配置检查 ---
-if not S2T_API_KEY:
-    print("警告: 环境变量 S2T_API_KEY 未设置。音频转录功能将无法使用。")
-if not S2T_API_URL.startswith(('http://', 'https://')):
-     print(f"警告: 环境变量 S2T_API_URL 格式不正确: {S2T_API_URL}。音频转录功能可能无法使用。")
-
-opt_configured_for_check = OPT_API_KEY or \
-                           (OPT_API_URL and OPT_API_URL != 'https://api.openai.com/v1/chat/completions') or \
-                           OPT_MODEL
-
-if opt_configured_for_check:
-    print("\n--- OPT 配置检查 ---")
-    if not OPT_API_KEY:
-        print("警告: 环境变量 OPT_API_KEY 未设置。文本优化功能将无法使用，仅返回原始转录结果。")
-    if OPT_API_KEY and (not OPT_API_URL or not OPT_API_URL.startswith(('http://', 'https://'))):
-        print(f"警告: 环境变量 OPT_API_URL ({OPT_API_URL}) 无效或格式不正确。文本优化功能可能无法使用。")
-    if OPT_API_KEY and not OPT_MODEL:
-         print("警告: 已设置 OPT_API_KEY 但未设置 OPT_MODEL。文本优化功能可能无法按预期工作。")
-    print("--------------------\n")
-
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
+# --- 辅助函数 ---
 def _extract_api_error_message(response):
     try:
         error_detail = response.json()
@@ -146,30 +128,24 @@ def _extract_api_error_message(response):
 def _split_text_intelligently(text, chunk_size=CHUNK_TARGET_SIZE):
     if not text or len(text) <= chunk_size:
         return [text] if text else []
-    
     delimiters = ['。', '！', '？', '\n']
     chunks = []
     start_index = 0
-    
     while start_index < len(text):
         end_index = start_index + chunk_size
         if end_index >= len(text):
             chunks.append(text[start_index:])
             break
-        
         best_split_pos = -1
         for d in delimiters:
             pos = text.rfind(d, start_index, end_index)
-            if pos > best_split_pos:
-                best_split_pos = pos
-        
+            if pos > best_split_pos: best_split_pos = pos
         if best_split_pos != -1:
             chunks.append(text[start_index : best_split_pos + 1])
             start_index = best_split_pos + 1
         else:
             chunks.append(text[start_index:end_index])
             start_index = end_index
-            
     return [c for c in chunks if c.strip()]
 
 def _get_last_sentence(text):
@@ -191,7 +167,7 @@ def _optimize_chunk_with_retry(chunk_data):
     headers = {'Authorization': f'Bearer {OPT_API_KEY}', 'Content-Type': 'application/json'}
     for attempt in range(RETRY_ATTEMPTS):
         try:
-            response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=200)
+            response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=300)
             if response.status_code == 200:
                 data = response.json()
                 content = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
@@ -208,11 +184,11 @@ def _optimize_chunk_with_retry(chunk_data):
 def _perform_text_optimization(raw_text_to_optimize):
     opt_configured_properly = OPT_API_KEY and OPT_API_URL and OPT_API_URL.startswith(('http://', 'https://')) and OPT_MODEL
     if not opt_configured_properly:
+        opt_configured_for_check = OPT_API_KEY or (OPT_API_URL and OPT_API_URL != 'https://api.openai.com/v1/chat/completions') or OPT_MODEL
         skip_reason_parts = []
         if not OPT_API_KEY: skip_reason_parts.append("缺少API Key")
         if not OPT_API_URL or not OPT_API_URL.startswith(('http://', 'https://')): skip_reason_parts.append("API URL无效")
         if not OPT_MODEL: skip_reason_parts.append("缺少模型名称")
-        
         if not opt_configured_for_check:
              opt_status_message = "校准已跳过 (服务未配置)"
         else:
@@ -231,18 +207,9 @@ def _perform_text_optimization(raw_text_to_optimize):
             
     print(f"文本过长({len(raw_text_to_optimize)}字)，启动分块并发校准...")
     chunks = _split_text_intelligently(raw_text_to_optimize)
-    print(f"文本被分割为 {len(chunks)} 块，使用 {MAX_CONCURRENT_WORKERS} 个并发进行处理。")
-    
-    tasks = []
-    for i, chunk in enumerate(chunks):
-        prev_chunk_context = _get_last_sentence(chunks[i-1]) if i > 0 else None
-        tasks.append({'text': chunk, 'context': prev_chunk_context})
-
-    processed_results = []
+    tasks = [{'text': chunk, 'context': (_get_last_sentence(chunks[i-1]) if i > 0 else None)} for i, chunk in enumerate(chunks)]
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_WORKERS) as executor:
-        results_iterator = executor.map(_optimize_chunk_with_retry, tasks)
-        processed_results = list(results_iterator)
-
+        processed_results = list(executor.map(_optimize_chunk_with_retry, tasks))
     failed_chunks = [res for res in processed_results if res['status'] == 'error']
     if failed_chunks:
         first_error_message = failed_chunks[0]['message']
@@ -259,7 +226,7 @@ def _summarize_chunk_with_retry(text_chunk):
     headers = {'Authorization': f'Bearer {OPT_API_KEY}', 'Content-Type': 'application/json'}
     for attempt in range(RETRY_ATTEMPTS):
         try:
-            response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=200)
+            response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=300)
             if response.status_code == 200:
                 data = response.json()
                 content = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
@@ -270,7 +237,6 @@ def _summarize_chunk_with_retry(text_chunk):
         except requests.exceptions.Timeout: error_msg = "请求超时"
         except requests.exceptions.RequestException as e: error_msg = f"网络连接错误: {type(e).__name__}"
         if attempt == RETRY_ATTEMPTS - 1: return {"status": "error", "message": error_msg}
-        print(f"总结块处理失败 (尝试 {attempt + 1}/{RETRY_ATTEMPTS}): {error_msg}. 将在 {2 * (attempt + 1)} 秒后重试...")
         time.sleep(2 * (attempt + 1))
     return {"status": "error", "message": "未知错误，已达最大重试次数"}
 
@@ -278,13 +244,11 @@ def _perform_summarization(text_to_summarize):
     print("开始总结任务: Map 阶段 - 并发提取要点...")
     chunks = _split_text_intelligently(text_to_summarize)
     if not chunks: return {"status": "error", "message": "待总结文本为空或分割失败"}
-    print(f"文本被分割为 {len(chunks)} 块，进行并发处理...")
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_WORKERS) as executor:
         map_results = list(executor.map(_summarize_chunk_with_retry, chunks))
     failed_chunks = [res for res in map_results if res['status'] == 'error']
     if failed_chunks:
         first_error = failed_chunks[0]['message']
-        print(f"Map 阶段失败: {first_error}")
         return {"status": "error", "message": f"提取要点失败 ({first_error})"}
     print("Map 阶段成功。开始 Reduce 阶段 - 整合生成最终摘要...")
     combined_points = "\n\n".join([res['content'] for res in map_results])
@@ -292,118 +256,171 @@ def _perform_summarization(text_to_summarize):
     payload = {'model': OPT_MODEL, 'messages': messages, 'temperature': 0.2}
     headers = {'Authorization': f'Bearer {OPT_API_KEY}', 'Content-Type': 'application/json'}
     try:
-        response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=200)
+        response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=300)
         if response.status_code == 200:
             data = response.json()
             final_summary = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
-            if final_summary:
-                print("Reduce 阶段成功，已生成最终摘要。")
-                return {"status": "success", "summary": final_summary}
+            if final_summary: return {"status": "success", "summary": final_summary}
             else: return {"status": "error", "message": "API为Reduce阶段返回空内容"}
         else:
             error_msg = f"API错误 {response.status_code}: {_extract_api_error_message(response)}"
             return {"status": "error", "message": f"整合摘要失败 ({error_msg})"}
     except Exception as e: return {"status": "error", "message": f"处理Reduce阶段时发生未知错误: {str(e)}"}
 
-# --- 路由 ---
-@app.route('/transcribe', methods=['POST'])
+# =============================================================
+# --- Web UI 页面服务路由 ---
+# =============================================================
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+# =============================================================
+# --- OpenAI 兼容 API 路由 ---
+# =============================================================
+@app.before_request
+def check_openai_auth():
+    if request.path.startswith('/v1/'):
+        if not API_ACCESS_TOKEN:
+            print("警告: API被调用，但环境变量 API_ACCESS_TOKEN 未设置。拒绝访问。")
+            return jsonify({"error": {"message": "API access is not configured on the server.", "type": "server_error"}}), 500
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({"error": {"message": "Authorization header is missing or invalid.", "type": "invalid_request_error"}}), 401
+        token = auth_header.split(' ')[1]
+        if token != API_ACCESS_TOKEN:
+            return jsonify({"error": {"message": "Incorrect API key provided.", "type": "invalid_request_error"}}), 401
+
+@app.route('/v1/models', methods=['GET'])
+def list_models():
+    return jsonify({
+        "object": "list",
+        "data": [
+            { "id": MODEL_CALIBRATE, "object": "model", "created": int(time.time()), "owned_by": "xy2yp" },
+            { "id": MODEL_SUMMARIZE, "object": "model", "created": int(time.time()), "owned_by": "xy2yp" },
+        ]
+    })
+
+@app.route('/v1/audio/transcriptions', methods=['POST'])
+def openai_audio_transcriptions():
+    if 'file' not in request.files: return jsonify({"error": "No file part in the request"}), 400
+    audio_file = request.files['file']
+    model_requested = request.form.get('model')
+    if not model_requested or model_requested not in [MODEL_CALIBRATE, MODEL_SUMMARIZE]:
+        return jsonify({"error": f"Model '{model_requested}' is not supported. Please use '{MODEL_CALIBRATE}' or '{MODEL_SUMMARIZE}'."}), 400
+
+    def generate_response():
+        try:
+            print(f"API Call: Received request for model '{model_requested}'. Starting S2T...")
+            yield " " 
+            s2t_files = {'file': (audio_file.filename, audio_file.stream, audio_file.mimetype)}
+            s2t_payload = {'model': S2T_MODEL}
+            s2t_headers = {'Authorization': f'Bearer {S2T_API_KEY}'}
+            s2t_response = requests.post(S2T_API_URL, files=s2t_files, data=s2t_payload, headers=s2t_headers, timeout=300)
+            if s2t_response.status_code != 200:
+                error_details = _extract_api_error_message(s2t_response)
+                raise Exception(f"Upstream S2T service failed with status {s2t_response.status_code}: {error_details}")
+            raw_transcription = s2t_response.json().get('text', '').strip()
+            if not raw_transcription: raise Exception("Upstream S2T service returned empty text.")
+        except Exception as e:
+            error_payload = {"error": {"message": str(e), "type": "upstream_error", "code": "s2t_failed"}}
+            yield json.dumps(error_payload, ensure_ascii=False)
+            return
+
+        print("API Call: S2T completed. Starting text optimization...")
+        yield " " 
+        calibrated_text, opt_message, is_calibrated = _perform_text_optimization(raw_transcription)
+        
+        final_response = {}
+        if model_requested == MODEL_CALIBRATE:
+            final_response["text"] = calibrated_text
+            if not is_calibrated:
+                final_response["x_warning"] = {"code": "calibration_failed", "message": f"Text optimization failed. Returning raw transcription. Reason: {opt_message}"}
+        
+        elif model_requested == MODEL_SUMMARIZE:
+            if not is_calibrated:
+                final_response["text"] = raw_transcription
+                final_response["x_warning"] = {"code": "calibration_failed_in_summary_workflow", "message": f"The calibration step failed. Returning the raw, un-calibrated transcription as a fallback. Reason: {opt_message}"}
+            else:
+                yield " " 
+                summary_result = _perform_summarization(calibrated_text)
+                if summary_result['status'] == 'success':
+                    final_response["text"] = summary_result['summary']
+                else:
+                    final_response["text"] = calibrated_text
+                    final_response["x_warning"] = {"code": "summarization_failed", "message": f"Final summarization step failed. Returning the full calibrated text instead. Reason: {summary_result['message']}"}
+        yield json.dumps(final_response, ensure_ascii=False)
+
+    return Response(stream_with_context(generate_response()), mimetype='application/json; charset=utf-8')
+
+
+# =============================================================
+# ---  Web UI 数据接口路由 ---
+# =============================================================
+@app.route('/api/transcribe', methods=['POST'])
 def transcribe_and_optimize_audio():
     audio_file = request.files.get('audio_file')
-    if not audio_file:
-        return jsonify({"error": "缺少上传的音频文件"}), 400
-
-    print("开始调用 S2T API 进行转录...")
-    if not S2T_API_KEY:
-         return jsonify({"error": "服务器配置错误：缺少 S2T API Key"}), 500
-    if not S2T_API_URL.startswith(('http://', 'https://')):
-        return jsonify({"error": "服务器配置错误：S2T API 端点 URL 格式不正确"}), 500
-
-    raw_transcription = ""
+    if not audio_file: return jsonify({"error": "缺少上传的音频文件"}), 400
     try:
         s2t_files = {'file': (audio_file.filename, audio_file.stream, audio_file.mimetype)}
         s2t_payload = {'model': S2T_MODEL}
         s2t_headers = {'Authorization': f'Bearer {S2T_API_KEY}'}
         s2t_response = requests.post(S2T_API_URL, files=s2t_files, data=s2t_payload, headers=s2t_headers, timeout=300)
-
-        if s2t_response.status_code == 200:
-            try:
-                s2t_data = s2t_response.json()
-                raw_transcription = s2t_data.get('text', '').strip()
-                if not raw_transcription:
-                    print("S2T API 返回空文本")
-                    return jsonify({"error": "S2T 服务未能识别出任何文本。"}), 500
-                print(f"S2T 转录成功，原始文本长度: {len(raw_transcription)}")
-            except ValueError:
-                 return jsonify({"error": "无法解析 S2T API 响应"}), 500
-        else:
+        if s2t_response.status_code != 200:
             error_details = _extract_api_error_message(s2t_response)
-            s2t_error_message = f"S2T API 返回错误: {s2t_response.status_code} - {error_details}"
-            print(s2t_error_message)
-            return jsonify({"error": s2t_error_message}), s2t_response.status_code
-            
-    except requests.exceptions.Timeout:
-        return jsonify({"error": "调用 S2T API 超时，请稍后再试或检查文件大小。"}), 500
-    except requests.exceptions.RequestException as e:
-        return jsonify({"error": f"调用 S2T API 时发生连接错误: {str(e)}"}), 500
-    except Exception as e:
-        print(f"处理 S2T 请求时发生未知错误: {e}")
-        return jsonify({"error": f"处理 S2T 请求时发生未知错误: {type(e).__name__}"}), 500
+            return jsonify({"error": f"S2T API 返回错误: {s2t_response.status_code} - {error_details}"}), 500
+        raw_transcription = s2t_response.json().get('text', '').strip()
+        if not raw_transcription: return jsonify({"error": "S2T 服务未能识别出任何文本。"}), 500
+    except requests.exceptions.Timeout: return jsonify({"error": "调用 S2T API 超时"}), 500
+    except Exception as e: return jsonify({"error": f"处理 S2T 请求时发生未知错误: {type(e).__name__}"}), 500
 
     final_transcription, opt_message, is_calibrated = _perform_text_optimization(raw_transcription)
     
-    if is_calibrated:
-        final_status_message = f"转录完成，{opt_message}"
-    elif "跳过" in opt_message:
-        final_status_message = f"转录完成 ({opt_message.replace('校准已跳过', '校准服务')})" 
-    else:
-        final_status_message = f"转录完成，{opt_message.replace('校准失败', '但校准失败')}"
+    if is_calibrated: final_status_message = f"转录完成，{opt_message}"
+    elif "跳过" in opt_message: final_status_message = f"转录完成 ({opt_message.replace('校准已跳过', '校准服务')})" 
+    else: final_status_message = f"转录完成，{opt_message.replace('校准失败', '但校准失败')}"
+    return jsonify({"status": "success", "transcription": final_transcription, "raw_transcription": raw_transcription, "calibration_message": final_status_message, "is_calibrated": is_calibrated})
 
-    return jsonify({
-        "status": "success",
-        "transcription": final_transcription,
-        "raw_transcription": raw_transcription,
-        "calibration_message": final_status_message,
-        "is_calibrated": is_calibrated
-    })
-
-@app.route('/recalibrate', methods=['POST'])
+@app.route('/api/recalibrate', methods=['POST'])
 def recalibrate_text():
     data = request.get_json()
-    if not data or 'raw_transcription' not in data:
-        return jsonify({"error": "请求体无效或缺少 raw_transcription 字段"}), 400
-        
+    if not data or 'raw_transcription' not in data: return jsonify({"error": "请求体无效或缺少 raw_transcription 字段"}), 400
     raw_text = data.get('raw_transcription')
-    if not isinstance(raw_text, str) or not raw_text.strip():
-        return jsonify({"error": "需要重新校准的文本不能为空"}), 400
-
-    print(f"收到重新校准请求，文本长度: {len(raw_text)}")
-    
+    if not isinstance(raw_text, str) or not raw_text.strip(): return jsonify({"error": "需要重新校准的文本不能为空"}), 400
     calibrated_text, calibration_status_msg, calibration_success = _perform_text_optimization(raw_text)
+    return jsonify({"status": "success", "transcription": calibrated_text, "calibration_message": calibration_status_msg, "is_calibrated": calibration_success})
 
-    return jsonify({
-        "status": "success",
-        "transcription": calibrated_text,
-        "calibration_message": calibration_status_msg,
-        "is_calibrated": calibration_success
-    })
-
-@app.route('/summarize', methods=['POST'])
+@app.route('/api/summarize', methods=['POST'])
 def summarize_text():
     data = request.get_json()
-    if not data or 'text_to_summarize' not in data:
-        return jsonify({"error": "请求体无效或缺少 'text_to_summarize' 字段"}), 400
-    
+    if not data or 'text_to_summarize' not in data: return jsonify({"error": "请求体无效或缺少 'text_to_summarize' 字段"}), 400
     text = data.get('text_to_summarize')
-    if not text or not text.strip():
-        return jsonify({"error": "待总结的文本不能为空"}), 400
-        
+    if not text or not text.strip(): return jsonify({"error": "待总结的文本不能为空"}), 400
     result = _perform_summarization(text)
-    
-    if result['status'] == 'success':
-        return jsonify({"summary": result['summary']})
-    else:
-        return jsonify({"error": result['message']}), 500
+    if result['status'] == 'success': return jsonify({"summary": result['summary']})
+    else: return jsonify({"error": result['message']}), 500
 
+# --- 主程序启动入口 ---
 if __name__ == '__main__':
-    print("服务器正在启动，监听 http://0.0.0.0:5000")
+    # 启动时进行配置检查
+    print("--- S2T 配置检查 ---")
+    if not S2T_API_KEY: print("警告: 环境变量 S2T_API_KEY 未设置。")
+    if not S2T_API_URL.startswith(('http://', 'https://')): print(f"警告: 环境变量 S2T_API_URL 格式不正确: {S2T_API_URL}。")
+    
+    print("\n--- OPT 配置检查 ---")
+    opt_configured_for_check = OPT_API_KEY or (OPT_API_URL and OPT_API_URL != 'https://api.openai.com/v1/chat/completions') or OPT_MODEL
+    if opt_configured_for_check:
+        if not OPT_API_KEY: print("警告: 环境变量 OPT_API_KEY 未设置。文本优化功能将无法使用。")
+        if OPT_API_KEY and (not OPT_API_URL or not OPT_API_URL.startswith(('http://', 'https://'))): print(f"警告: 环境变量 OPT_API_URL ({OPT_API_URL}) 无效或格式不正确。")
+        if OPT_API_KEY and not OPT_MODEL: print("警告: 已设置 OPT_API_KEY 但未设置 OPT_MODEL。")
+    else:
+        print("提示: OPT服务未配置，校准和总结功能将不可用。")
+
+    print("\n--- API 封装功能检查 ---")
+    if not API_ACCESS_TOKEN:
+        print("警告: 环境变量 API_ACCESS_TOKEN 未设置或为空。API封装功能将无法通过认证。")
+    else:
+        print("API封装功能已启用。")
+    
+    print("\n--------------------\n")
+    print(f"服务器正在启动，监听 http://0.0.0.0:5000")
     serve(app, host='0.0.0.0', port=5000)
