@@ -1,0 +1,34 @@
+name: Upstream Sync - Siliconflow Speech To Text
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # 定时触发器：每天 UTC 时间 4:00 (北京时间中午 12:00) 运行一次
+  workflow_dispatch: # 允许手动从 GitHub Actions 页面触发此工作流
+
+jobs:
+  sync_latest_from_upstream:
+    name: Sync latest commits from siliconflow-speech-to-text/siliconflow-speech-to-text
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork }} # 确保只在 Fork 仓库中运行
+
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+
+      - name: Sync upstream changes
+        id: sync
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.1
+        with:
+          upstream_sync_repo: siliconflow-speech-to-text/siliconflow-speech-to-text # *** 这里请确认上游仓库的完整路径 ***
+          upstream_sync_branch: main # *** 请确认上游仓库的默认分支是 main 还是其他 ***
+          target_sync_branch: main # *** 已修改为 main，你的 Fork 仓库默认分支是 main ***
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }} # 使用 GitHub 提供的默认 Token
+
+      - name: Sync check
+        if: failure()
+        run: |
+          echo "[Error] Due to a change in the workflow file of the upstream repository, GitHub has automatically suspended the scheduled automatic update. You need to manually sync your fork."
+          exit 1
