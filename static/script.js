@@ -8,12 +8,15 @@ document.addEventListener('DOMContentLoaded', function() {
     const copyBtn = document.getElementById('copyBtn');
     const recalibrateBtn = document.getElementById('recalibrateBtn');
     const summarizeBtn = document.getElementById('summarizeBtn');
+    const generateNotesBtn = document.getElementById('generateNotesBtn');
 
     // --- 状态变量 ---
     let currentRawTranscription = null;
     let currentCalibratedText = null;
     let summaryText = null;
     let isShowingSummary = false;
+    let notesText = null;
+    let isShowingNotes = false;
 
     // --- UI 更新函数 ---
     function updateStatus(message, type) {
@@ -38,6 +41,7 @@ document.addEventListener('DOMContentLoaded', function() {
         recalibrateBtn.disabled = disabled || !hasContent;
         copyBtn.disabled = disabled || transcriptionResult.textContent.trim() === '';
         summarizeBtn.disabled = disabled || !hasContent;
+        generateNotesBtn.disabled = disabled || !hasContent;
     }
 
     // --- 状态重置函数 ---
@@ -45,6 +49,9 @@ document.addEventListener('DOMContentLoaded', function() {
         summaryText = null;
         isShowingSummary = false;
         summarizeBtn.textContent = '量子速读';
+        notesText = null;
+        isShowingNotes = false;
+        generateNotesBtn.textContent = '生成笔记';
         if (currentCalibratedText) {
             transcriptionResult.textContent = currentCalibratedText;
         } else {
@@ -70,6 +77,7 @@ document.addEventListener('DOMContentLoaded', function() {
             recalibrateBtn.disabled = true;
             copyBtn.disabled = true;
             summarizeBtn.disabled = true;
+            generateNotesBtn.disabled = true;
             copyBtn.textContent = '复制文本'; // 确保复制按钮文本也被重置
             copyBtn.classList.remove('copied-success', 'copied-error');
 
@@ -228,7 +236,67 @@ document.addEventListener('DOMContentLoaded', function() {
             setActionButtonsDisabledState(false);
         }
     });
+    
+    generateNotesBtn.addEventListener('click', async function() {
+        // 情况1：切换视图
+        if (notesText) {
+            isShowingNotes = !isShowingNotes;
+            if (isShowingNotes) {
+                transcriptionResult.textContent = notesText;
+                generateNotesBtn.textContent = '显示原文';
+            } else {
+                transcriptionResult.textContent = currentCalibratedText;
+                generateNotesBtn.textContent = '显示笔记';
+            }
+            // 切换视图后，需要重新评估复制按钮的状态
+            copyBtn.disabled = transcriptionResult.textContent.trim() === '';
+            return;
+        }
 
+        // 情况2：首次生成笔记
+        if (!currentCalibratedText || currentCalibratedText.trim() === '') {
+            updateStatus('没有可供生成笔记的文本。', 'info');
+            return;
+        }
+
+        updateStatus('正在生成笔记...', 'info');
+        setActionButtonsDisabledState(true);
+        const originalText = generateNotesBtn.textContent;
+        generateNotesBtn.textContent = '生成中...';
+
+        try {
+            const response = await fetch('/api/generatenote', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text_to_process: currentCalibratedText })
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: `请求失败 (状态 ${response.status})` }));
+                throw new Error(errorData.error);
+            }
+
+            const data = await response.json();
+            if (data.notes) {
+                notesText = data.notes;
+                isShowingNotes = true;
+                
+                transcriptionResult.textContent = notesText;
+                updateStatus('笔记生成成功！', 'success');
+                generateNotesBtn.textContent = '显示原文';
+            } else {
+                throw new Error('API未能返回有效的笔记内容。');
+            }
+
+        } catch (error) {
+            console.error('生成笔记错误:', error);
+            updateStatus(`生成笔记失败 (${error.message})，请重试...`, 'error');
+            generateNotesBtn.textContent = originalText;
+        } finally {
+            setActionButtonsDisabledState(false);
+        }
+    });
+    
     copyBtn.addEventListener('click', function() {
         if (copyBtn.disabled) return;
 
