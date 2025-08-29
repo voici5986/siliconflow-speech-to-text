@@ -560,26 +560,53 @@ def openai_audio_transcriptions():
 # =============================================================
 @app.route('/api/transcribe', methods=['POST'])
 def transcribe_and_optimize_audio():
+    print("\n--- [Transcribe] 请求开始 ---")
     audio_file = request.files.get('audio_file')
-    if not audio_file: return jsonify({"error": "缺少上传的音频文件"}), 400
+    if not audio_file:
+        print("[Transcribe] 错误: 请求中缺少音频文件。")
+        return jsonify({"error": "缺少上传的音频文件"}), 400
+    
     try:
         s2t_files = {'file': (audio_file.filename, audio_file.stream, audio_file.mimetype)}
         s2t_payload = {'model': S2T_MODEL}
         s2t_headers = {'Authorization': f'Bearer {S2T_API_KEY}'}
+        
+        print(f"[Transcribe] 正在调用 S2T API: {S2T_API_URL}")
+        start_time = time.time()
         s2t_response = requests.post(S2T_API_URL, files=s2t_files, data=s2t_payload, headers=s2t_headers, timeout=300)
+        end_time = time.time()
+        print(f"[Transcribe] S2T API 响应完毕. 状态码: {s2t_response.status_code}, 耗时: {end_time - start_time:.2f} 秒.")
+
         if s2t_response.status_code != 200:
             error_details = _extract_api_error_message(s2t_response)
+            print(f"[Transcribe] S2T API 错误: {s2t_response.status_code} - {error_details}")
             return jsonify({"error": f"S2T API 返回错误: {s2t_response.status_code} - {error_details}"}), 500
+        
         raw_transcription = s2t_response.json().get('text', '').strip()
-        if not raw_transcription: return jsonify({"error": "S2T 服务未能识别出任何文本。"}), 500
-    except requests.exceptions.Timeout: return jsonify({"error": "调用 S2T API 超时"}), 500
-    except Exception as e: return jsonify({"error": f"处理 S2T 请求时发生未知错误: {type(e).__name__}"}), 500
+        if not raw_transcription:
+            print("[Transcribe] 错误: S2T 服务未能识别出任何文本。")
+            return jsonify({"error": "S2T 服务未能识别出任何文本。"}), 500
+        print("[Transcribe] S2T 文本获取成功.")
 
+    except requests.exceptions.Timeout:
+        print(f"[Transcribe] 错误: 调用 S2T API 超时 (超过300秒).")
+        return jsonify({"error": "调用 S2T API 超时"}), 500
+    except Exception as e:
+        print(f"[Transcribe] 错误: 处理 S2T 请求时发生未知错误: {type(e).__name__} - {e}")
+        return jsonify({"error": f"处理 S2T 请求时发生未知错误: {type(e).__name__}"}), 500
+
+    print("[Transcribe] 正在调用文本优化...")
     final_transcription, opt_message, is_calibrated = _perform_text_optimization(raw_transcription)
+    print(f"[Transcribe] 文本优化完成. 状态: {opt_message}")
     
-    if is_calibrated: final_status_message = f"转录完成，{opt_message}"
-    elif "跳过" in opt_message: final_status_message = f"转录完成 ({opt_message.replace('校准已跳过', '校准服务')})" 
-    else: final_status_message = f"转录完成，{opt_message.replace('校准失败', '但校准失败')}"
+    if is_calibrated:
+        final_status_message = f"转录完成，{opt_message}"
+    elif "跳过" in opt_message:
+        final_status_message = f"转录完成 ({opt_message.replace('校准已跳过', '校准服务')})"
+    else:
+        final_status_message = f"转录完成，{opt_message.replace('校准失败', '但校准失败')}"
+    
+    print("[Transcribe] 请求处理完毕，正在返回结果。")
     return jsonify({"status": "success", "transcription": final_transcription, "raw_transcription": raw_transcription, "calibration_message": final_status_message, "is_calibrated": is_calibrated})
 
 @app.route('/api/recalibrate', methods=['POST'])
