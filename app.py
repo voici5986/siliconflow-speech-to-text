@@ -16,7 +16,12 @@ S2T_MODEL = os.environ.get('S2T_MODEL', 'FunAudioLLM/SenseVoiceSmall')
 
 OPT_API_URL = os.environ.get('OPT_API_URL', 'https://api.openai.com/v1/chat/completions')
 OPT_API_KEY = os.environ.get('OPT_API_KEY')
-OPT_MODEL = os.environ.get('OPT_MODEL')
+OPT_MODEL = os.environ.get('OPT_MODEL') # 默认模型
+
+# --- 各功能专用模型配置（向后兼容）---
+CALIBRATION_MODEL = os.environ.get('CALIBRATION_MODEL', OPT_MODEL) # 校准模型
+SUMMARY_MODEL = os.environ.get('SUMMARY_MODEL', OPT_MODEL) # 摘要(量子速读)模型
+NOTES_MODEL = os.environ.get('NOTES_MODEL', OPT_MODEL) # 笔记生成模型
 
 # --- 分块处理配置 ---
 CHUNK_TARGET_SIZE = 5000
@@ -115,6 +120,57 @@ Constraints:
 3. 输出格式应为一篇格式化良好、适合人类阅读的完整文章。
 """
 
+PROMPT_GENERATE_NOTES = """
+我是一名世界顶尖学术机构专精于定性数据分析的高级研究助理，能够将用户提供的非结构化文本（如视频转录稿等）转化为结构清晰、信息密集的学术笔记。我的分析过程严谨、确定，推理温度设定在0.2，以确保最高水平的学术准确性和逻辑严密性。
+
+我处理的所有文本都必须被包裹在`<待处理文本>`标签内。
+
+我的核心任务是深度提炼、整合并构建信息，最终生成一份逻辑严谨、可直接用于学术报告或研究论文的高质量中文笔记。为此，我遵循一个严格的三阶段自我校对工作流程：
+
+**第一阶段：草稿生成**
+我会根据以下步骤，创建一份初步的学术笔记草稿：
+1. **核心论点提炼**：首先，用一句话精准概括所提供文本的核心论点或研究问题，确立整篇笔记的主线。
+2. **深度分析与主题识别**：通读并分析全部内容，识别出贯穿全文的核心主题、主要论点和基本逻辑框架，剔除所有广告、口头禅、无关闲聊等干扰信息。
+3. **结构化信息重组**：在理解整体结构后，将所有相关信息进行逻辑分组和层级归类。主动识别并整理内容中的核心概念、关键论据、支撑数据、案例分析、数学公式和重要结论，将它们置于最合适的逻辑层级之下。
+4. **精炼总结与量化提炼**：在结构化基础上，对每个信息组进行综合性提炼与总结。每个子主题下的核心要点总结控制在50字以内，以最精确、简洁的学术语言概括其实质内容。
+
+**第二阶段：自我批判与审查**
+生成草稿后，我会暂停并启动内部审查机制。从批判性学者的角度，全面审视草稿的：
+- **逻辑连贯性**：检查论证链条的完整性和推理的严密性
+- **信息密度**：确保每个段落都具有高信息价值，无冗余表达
+- **结构清晰度**：验证层次分明，逻辑流畅
+- **学术规范性**：检查语言风格、术语使用和格式要求的一致性
+
+识别出任何潜在的逻辑漏洞、总结不足或结构不清之处。
+
+**第三阶段：最终版本输出**
+基于自我审查结果，重写并优化草稿，生成最终的精炼版本。
+
+我的最终输出必须严格遵守以下规范：
+
+**格式要求：**
+- 所有输出采用层级分明的Markdown格式，使用标准标题层次（#, ##, ###）、嵌套列表（-）和粗体（**）构建清晰的视觉和逻辑结构
+- 所有编号主题统一使用H2格式：`## 1. 主题名称`，避免渲染错误
+- 数学公式必须使用标准LaTeX语法，确保Markdown环境正确渲染
+- 布局优化,通过项目符号、表格和简洁段落增强可读性
+-
+**语调与风格：**
+- 始终保持专业、客观、正式的学术语调
+- 语言力求精确、简洁、无歧义，避免口语化或主观性表达
+- 专有名词、技术术语、品牌名称、人名保留英文原文以确保准确性
+
+**内容焦点：**
+- 聚焦信息实质内容，突出核心概念、关键论据、支撑数据和最终结论
+- 确保笔记具有极高的信息密度和学术价值
+- 保留所有重要的计算过程、推导步骤和量化分析
+
+**交付物：**
+- 输出必须直接以一级Markdown标题（#）开始，严格遵循所构建的笔记结构
+- 纯Markdown文本输出，不使用任何代码块包裹
+
+现在，请在`<待处理文本>`标签内提供您的视频转录内容，我将严格按照以上三阶段工作流程为您生成高质量的学术笔记。
+"""
+
 # --- 辅助函数 ---
 def _extract_api_error_message(response):
     try:
@@ -125,7 +181,13 @@ def _extract_api_error_message(response):
     except ValueError:
         return response.text[:200]
 
+# 智能分块策略函数
 def _split_text_intelligently(text, chunk_size=CHUNK_TARGET_SIZE):
+    '''
+    目标大小：CHUNK_TARGET_SIZE = 5000字符
+    分割策略：优先在句号、感叹号、问号、换行符处切分
+    边界处理：避免在词汇中间切断
+    '''
     if not text or len(text) <= chunk_size:
         return [text] if text else []
     delimiters = ['。', '！', '？', '\n']
@@ -163,32 +225,56 @@ def _optimize_chunk_with_retry(chunk_data):
     else:
         user_content = text_chunk
     messages.append({"role": "user", "content": user_content})
-    payload = {'model': OPT_MODEL, 'messages': messages, 'temperature': 0.1}
+    payload = {'model': CALIBRATION_MODEL, 'messages': messages, 'temperature': 0.1}
     headers = {'Authorization': f'Bearer {OPT_API_KEY}', 'Content-Type': 'application/json'}
+    
+    # 重试机制，带有详细日志输出
     for attempt in range(RETRY_ATTEMPTS):
         try:
+            print(f"校准API调用 (尝试 {attempt + 1}/{RETRY_ATTEMPTS})")
             response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=300)
+            
             if response.status_code == 200:
                 data = response.json()
                 content = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
-                if content: return {"status": "success", "content": content}
-                else: return {"status": "error", "message": "API返回空内容"}
-            error_msg = f"API错误 {response.status_code}: {_extract_api_error_message(response)}"
-            if response.status_code in [400, 401, 403, 429]: return {"status": "error", "message": error_msg}
-        except requests.exceptions.Timeout: error_msg = "请求超时"
-        except requests.exceptions.RequestException as e: error_msg = f"网络连接错误: {type(e).__name__}"
-        if attempt == RETRY_ATTEMPTS - 1: return {"status": "error", "message": error_msg}
-        time.sleep(2 * (attempt + 1))
+                if content:
+                    print("校准成功")
+                    return {"status": "success", "content": content}
+                else:
+                    return {"status": "error", "message": "API返回空内容"}
+            else:
+                error_msg = f"API错误 {response.status_code}: {_extract_api_error_message(response)}"
+                # 对于客户端错误，不进行重试
+                if response.status_code in [400, 401, 403, 429]:
+                    return {"status": "error", "message": error_msg}
+                
+        except requests.exceptions.Timeout:
+            error_msg = "请求超时"
+        except requests.exceptions.RequestException as e:
+            error_msg = f"网络连接错误: {type(e).__name__}"
+        except Exception as e:
+            error_msg = f"未知错误: {str(e)}"
+        
+        # 如果是最后一次重试，返回错误
+        if attempt == RETRY_ATTEMPTS - 1:
+            print(f"校准失败: {error_msg}")
+            return {"status": "error", "message": error_msg}
+        
+        # 重试前等待
+        wait_time = 2 * (attempt + 1)
+        print(f"校准失败，{wait_time}秒后重试: {error_msg}")
+        time.sleep(wait_time)
+    
     return {"status": "error", "message": "未知错误，已达最大重试次数"}
 
 def _perform_text_optimization(raw_text_to_optimize):
-    opt_configured_properly = OPT_API_KEY and OPT_API_URL and OPT_API_URL.startswith(('http://', 'https://')) and OPT_MODEL
+    opt_configured_properly = OPT_API_KEY and OPT_API_URL and OPT_API_URL.startswith(('http://', 'https://')) and CALIBRATION_MODEL
     if not opt_configured_properly:
-        opt_configured_for_check = OPT_API_KEY or (OPT_API_URL and OPT_API_URL != 'https://api.openai.com/v1/chat/completions') or OPT_MODEL
+        opt_configured_for_check = OPT_API_KEY or (OPT_API_URL and OPT_API_URL != 'https://api.openai.com/v1/chat/completions') or CALIBRATION_MODEL
         skip_reason_parts = []
         if not OPT_API_KEY: skip_reason_parts.append("缺少API Key")
         if not OPT_API_URL or not OPT_API_URL.startswith(('http://', 'https://')): skip_reason_parts.append("API URL无效")
-        if not OPT_MODEL: skip_reason_parts.append("缺少模型名称")
+        if not CALIBRATION_MODEL: skip_reason_parts.append("缺少校准模型名称")
         if not opt_configured_for_check:
              opt_status_message = "校准已跳过 (服务未配置)"
         else:
@@ -220,9 +306,16 @@ def _perform_text_optimization(raw_text_to_optimize):
         print("所有块均已成功校准并合并。")
         return full_optimized_text, "校准成功！", True
 
+# 要点提取逻辑函数
 def _summarize_chunk_with_retry(text_chunk):
+    '''
+    使用PROMPT_SUMMARY_MAP prompt
+    对每个文本块提取关键信息点
+    输出格式：无序列表(bullet points)
+    重试机制：失败时重试最多3次
+    '''
     messages = [{"role": "system", "content": PROMPT_SUMMARY_MAP}, {"role": "user", "content": text_chunk}]
-    payload = {'model': OPT_MODEL, 'messages': messages, 'temperature': 0.1}
+    payload = {'model': SUMMARY_MODEL, 'messages': messages, 'temperature': 0.1}
     headers = {'Authorization': f'Bearer {OPT_API_KEY}', 'Content-Type': 'application/json'}
     for attempt in range(RETRY_ATTEMPTS):
         try:
@@ -240,10 +333,13 @@ def _summarize_chunk_with_retry(text_chunk):
         time.sleep(2 * (attempt + 1))
     return {"status": "error", "message": "未知错误，已达最大重试次数"}
 
+# 后端核心处理流程
 def _perform_summarization(text_to_summarize):
     print("开始总结任务: Map 阶段 - 并发提取要点...")
+    # Step 1: 智能文本分块（_split_text_intelligently()）
     chunks = _split_text_intelligently(text_to_summarize)
     if not chunks: return {"status": "error", "message": "待总结文本为空或分割失败"}
+    # Step 2: Map阶段 - 并发要点提取（_summarize_chunk_with_retry()），按CHUNK_TARGET_SIZE（默认5000）字符分块，并发处理每个文本块
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_WORKERS) as executor:
         map_results = list(executor.map(_summarize_chunk_with_retry, chunks))
     failed_chunks = [res for res in map_results if res['status'] == 'error']
@@ -251,21 +347,127 @@ def _perform_summarization(text_to_summarize):
         first_error = failed_chunks[0]['message']
         return {"status": "error", "message": f"提取要点失败 ({first_error})"}
     print("Map 阶段成功。开始 Reduce 阶段 - 整合生成最终摘要...")
+    # Step 3: Reduce阶段 - 整合最终摘要
+    ## 合并所有要点
     combined_points = "\n\n".join([res['content'] for res in map_results])
+    ## 使用PROMPT_SUMMARY_REDUCE prompt 进行最终整合
     messages = [{"role": "system", "content": PROMPT_SUMMARY_REDUCE}, {"role": "user", "content": combined_points}]
-    payload = {'model': OPT_MODEL, 'messages': messages, 'temperature': 0.2}
+    payload = {'model': SUMMARY_MODEL, 'messages': messages, 'temperature': 0.2}
     headers = {'Authorization': f'Bearer {OPT_API_KEY}', 'Content-Type': 'application/json'}
-    try:
-        response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=300)
-        if response.status_code == 200:
-            data = response.json()
-            final_summary = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
-            if final_summary: return {"status": "success", "summary": final_summary}
-            else: return {"status": "error", "message": "API为Reduce阶段返回空内容"}
-        else:
-            error_msg = f"API错误 {response.status_code}: {_extract_api_error_message(response)}"
-            return {"status": "error", "message": f"整合摘要失败 ({error_msg})"}
-    except Exception as e: return {"status": "error", "message": f"处理Reduce阶段时发生未知错误: {str(e)}"}
+    
+    # 添加重试机制，与其他功能保持一致
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=300)
+            if response.status_code == 200:
+                data = response.json()
+                final_summary = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+                if final_summary:
+                    return {"status": "success", "summary": final_summary}
+                else:
+                    return {"status": "error", "message": "API为Reduce阶段返回空内容"}
+            else:
+                error_msg = f"API错误 {response.status_code}: {_extract_api_error_message(response)}"
+                # 对于客户端错误，不进行重试
+                if response.status_code in [400, 401, 403, 429]:
+                    return {"status": "error", "message": f"整合摘要失败 ({error_msg})"}
+        except requests.exceptions.Timeout:
+            error_msg = "请求超时"
+        except requests.exceptions.RequestException as e:
+            error_msg = f"网络连接错误: {type(e).__name__}"
+        except Exception as e:
+            error_msg = f"未知错误: {str(e)}"
+        
+        # 如果是最后一次重试，返回错误
+        if attempt == RETRY_ATTEMPTS - 1:
+            return {"status": "error", "message": f"处理Reduce阶段时发生错误: {error_msg}"}
+        
+        # 重试前等待，使用与其他函数一致的退避策略
+        time.sleep(2 * (attempt + 1))
+    
+    return {"status": "error", "message": "未知错误，已达最大重试次数"}
+
+# 笔记生成核心处理函数
+def _perform_notes_generation(text_to_process):
+    '''
+    生成笔记功能
+    - 直接对整个文本进行单次API调用（不使用Map-Reduce）
+    - 将文本包裹在<待处理文本>标签内
+    - 使用PROMPT_GENERATE_NOTES作为系统prompt
+    - 设置temperature=0.2确保学术准确性
+    - 包含重试机制
+    '''
+    if not text_to_process or not text_to_process.strip():
+        return {"status": "error", "message": "待处理文本不能为空"}
+    
+    # 检查API配置
+    opt_configured_properly = OPT_API_KEY and OPT_API_URL and OPT_API_URL.startswith(('http://', 'https://')) and NOTES_MODEL
+    if not opt_configured_properly:
+        skip_reason_parts = []
+        if not OPT_API_KEY: skip_reason_parts.append("缺少API Key")
+        if not OPT_API_URL or not OPT_API_URL.startswith(('http://', 'https://')): skip_reason_parts.append("API URL无效")
+        if not NOTES_MODEL: skip_reason_parts.append("缺少笔记生成模型名称")
+        skip_reason = ", ".join(skip_reason_parts)
+        return {"status": "error", "message": f"笔记生成服务配置不完整: {skip_reason}"}
+    
+    print(f"开始生成笔记，文本长度: {len(text_to_process)} 字符")
+    
+    # 将文本包裹在待处理文本标签内
+    wrapped_text = f"<待处理文本>\n{text_to_process.strip()}\n</待处理文本>"
+    
+    # 构建API请求
+    messages = [
+        {"role": "system", "content": PROMPT_GENERATE_NOTES},
+        {"role": "user", "content": wrapped_text}
+    ]
+    payload = {
+        'model': NOTES_MODEL,
+        'messages': messages,
+        'temperature': 0.2  # 确保学术准确性
+    }
+    headers = {
+        'Authorization': f'Bearer {OPT_API_KEY}',
+        'Content-Type': 'application/json'
+    }
+    
+    # 重试机制
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            print(f"笔记生成API调用 (尝试 {attempt + 1}/{RETRY_ATTEMPTS})")
+            response = requests.post(OPT_API_URL, headers=headers, json=payload, timeout=300)
+            
+            if response.status_code == 200:
+                data = response.json()
+                content = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+                if content:
+                    print("笔记生成成功")
+                    return {"status": "success", "notes": content}
+                else:
+                    return {"status": "error", "message": "API返回空内容"}
+            else:
+                error_msg = f"API错误 {response.status_code}: {_extract_api_error_message(response)}"
+                # 对于客户端错误，不进行重试
+                if response.status_code in [400, 401, 403, 429]:
+                    return {"status": "error", "message": error_msg}
+                
+        except requests.exceptions.Timeout:
+            error_msg = "请求超时"
+        except requests.exceptions.RequestException as e:
+            error_msg = f"网络连接错误: {type(e).__name__}"
+        except Exception as e:
+            error_msg = f"未知错误: {str(e)}"
+        
+        # 如果是最后一次重试，返回错误
+        if attempt == RETRY_ATTEMPTS - 1:
+            print(f"笔记生成失败: {error_msg}")
+            return {"status": "error", "message": error_msg}
+        
+        # 重试前等待
+        wait_time = 2 * (attempt + 1)
+        print(f"笔记生成失败，{wait_time}秒后重试: {error_msg}")
+        time.sleep(wait_time)
+    
+    return {"status": "error", "message": "未知错误，已达最大重试次数"}
 
 # =============================================================
 # --- Web UI 页面服务路由 ---
@@ -354,30 +556,57 @@ def openai_audio_transcriptions():
 
 
 # =============================================================
-# ---  Web UI 数据接口路由 ---
+# ---  Web UI 数据接口路由API ---
 # =============================================================
 @app.route('/api/transcribe', methods=['POST'])
 def transcribe_and_optimize_audio():
+    print("\n--- [Transcribe] 请求开始 ---")
     audio_file = request.files.get('audio_file')
-    if not audio_file: return jsonify({"error": "缺少上传的音频文件"}), 400
+    if not audio_file:
+        print("[Transcribe] 错误: 请求中缺少音频文件。")
+        return jsonify({"error": "缺少上传的音频文件"}), 400
+    
     try:
         s2t_files = {'file': (audio_file.filename, audio_file.stream, audio_file.mimetype)}
         s2t_payload = {'model': S2T_MODEL}
         s2t_headers = {'Authorization': f'Bearer {S2T_API_KEY}'}
+        
+        print(f"[Transcribe] 正在调用 S2T API: {S2T_API_URL}")
+        start_time = time.time()
         s2t_response = requests.post(S2T_API_URL, files=s2t_files, data=s2t_payload, headers=s2t_headers, timeout=300)
+        end_time = time.time()
+        print(f"[Transcribe] S2T API 响应完毕. 状态码: {s2t_response.status_code}, 耗时: {end_time - start_time:.2f} 秒.")
+
         if s2t_response.status_code != 200:
             error_details = _extract_api_error_message(s2t_response)
+            print(f"[Transcribe] S2T API 错误: {s2t_response.status_code} - {error_details}")
             return jsonify({"error": f"S2T API 返回错误: {s2t_response.status_code} - {error_details}"}), 500
+        
         raw_transcription = s2t_response.json().get('text', '').strip()
-        if not raw_transcription: return jsonify({"error": "S2T 服务未能识别出任何文本。"}), 500
-    except requests.exceptions.Timeout: return jsonify({"error": "调用 S2T API 超时"}), 500
-    except Exception as e: return jsonify({"error": f"处理 S2T 请求时发生未知错误: {type(e).__name__}"}), 500
+        if not raw_transcription:
+            print("[Transcribe] 错误: S2T 服务未能识别出任何文本。")
+            return jsonify({"error": "S2T 服务未能识别出任何文本。"}), 500
+        print("[Transcribe] S2T 文本获取成功.")
 
+    except requests.exceptions.Timeout:
+        print(f"[Transcribe] 错误: 调用 S2T API 超时 (超过300秒).")
+        return jsonify({"error": "调用 S2T API 超时"}), 500
+    except Exception as e:
+        print(f"[Transcribe] 错误: 处理 S2T 请求时发生未知错误: {type(e).__name__} - {e}")
+        return jsonify({"error": f"处理 S2T 请求时发生未知错误: {type(e).__name__}"}), 500
+
+    print("[Transcribe] 正在调用文本优化...")
     final_transcription, opt_message, is_calibrated = _perform_text_optimization(raw_transcription)
+    print(f"[Transcribe] 文本优化完成. 状态: {opt_message}")
     
-    if is_calibrated: final_status_message = f"转录完成，{opt_message}"
-    elif "跳过" in opt_message: final_status_message = f"转录完成 ({opt_message.replace('校准已跳过', '校准服务')})" 
-    else: final_status_message = f"转录完成，{opt_message.replace('校准失败', '但校准失败')}"
+    if is_calibrated:
+        final_status_message = f"转录完成，{opt_message}"
+    elif "跳过" in opt_message:
+        final_status_message = f"转录完成 ({opt_message.replace('校准已跳过', '校准服务')})"
+    else:
+        final_status_message = f"转录完成，{opt_message.replace('校准失败', '但校准失败')}"
+    
+    print("[Transcribe] 请求处理完毕，正在返回结果。")
     return jsonify({"status": "success", "transcription": final_transcription, "raw_transcription": raw_transcription, "calibration_message": final_status_message, "is_calibrated": is_calibrated})
 
 @app.route('/api/recalibrate', methods=['POST'])
@@ -399,6 +628,24 @@ def summarize_text():
     if result['status'] == 'success': return jsonify({"summary": result['summary']})
     else: return jsonify({"error": result['message']}), 500
 
+@app.route('/api/generatenote', methods=['POST'])
+def generate_notes():
+    data = request.get_json()
+    if not data or 'text_to_process' not in data:
+        return jsonify({"error": "请求体无效或缺少 'text_to_process' 字段"}), 400
+    
+    text = data.get('text_to_process')
+    if not isinstance(text, str) or not text.strip():
+        return jsonify({"error": "待处理的文本不能为空"}), 400
+    
+    print(f"收到笔记生成请求，文本长度: {len(text)} 字符")
+    
+    result = _perform_notes_generation(text)
+    if result['status'] == 'success':
+        return jsonify({"status": "success", "notes": result['notes']})
+    else:
+        return jsonify({"error": result['message']}), 500
+
 # --- 主程序启动入口 ---
 if __name__ == '__main__':
     # 启动时进行配置检查
@@ -412,8 +659,29 @@ if __name__ == '__main__':
         if not OPT_API_KEY: print("警告: 环境变量 OPT_API_KEY 未设置。文本优化功能将无法使用。")
         if OPT_API_KEY and (not OPT_API_URL or not OPT_API_URL.startswith(('http://', 'https://'))): print(f"警告: 环境变量 OPT_API_URL ({OPT_API_URL}) 无效或格式不正确。")
         if OPT_API_KEY and not OPT_MODEL: print("警告: 已设置 OPT_API_KEY 但未设置 OPT_MODEL。")
+        
+        # 检查各功能的专用模型配置
+        print("\n--- 功能专用模型配置检查 ---")
+        calibration_custom = os.environ.get('CALIBRATION_MODEL') is not None
+        summary_custom = os.environ.get('SUMMARY_MODEL') is not None
+        notes_custom = os.environ.get('NOTES_MODEL') is not None
+        
+        if calibration_custom:
+            print(f"✓ 校准功能使用专用模型: {CALIBRATION_MODEL}")
+        else:
+            print(f"✓ 校准功能使用默认模型: {CALIBRATION_MODEL} (来自OPT_MODEL)")
+            
+        if summary_custom:
+            print(f"✓ 摘要功能使用专用模型: {SUMMARY_MODEL}")
+        else:
+            print(f"✓ 摘要功能使用默认模型: {SUMMARY_MODEL} (来自OPT_MODEL)")
+            
+        if notes_custom:
+            print(f"✓ 笔记功能使用专用模型: {NOTES_MODEL}")
+        else:
+            print(f"✓ 笔记功能使用默认模型: {NOTES_MODEL} (来自OPT_MODEL)")
     else:
-        print("提示: OPT服务未配置，校准和总结功能将不可用。")
+        print("提示: OPT服务未配置，校准、总结和笔记生成功能将不可用。")
 
     print("\n--- API 封装功能检查 ---")
     if not API_ACCESS_TOKEN:
